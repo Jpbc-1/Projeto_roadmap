@@ -9,6 +9,10 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/roadmap_ai"
 
+    SECRET_KEY: str = "troque-essa-chave-no-.env-por-uma-aleatoria"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  
+
     class Config:
         env_file = ".env"
 
