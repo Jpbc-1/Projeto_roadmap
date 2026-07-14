@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.v1.endpoints import auth
+from app.api.v1.endpoints import auth, goals, missions
 
 app = FastAPI(
     title="Roadmap AI API",
@@ -9,6 +9,8 @@ app = FastAPI(
 )
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(goals.router, prefix="/api/v1/goals", tags=["goals"])
+app.include_router(missions.router, prefix="/api/v1/missions", tags=["missions"])
 
 
 @app.get("/health", tags=["status"])
