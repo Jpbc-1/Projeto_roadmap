@@ -1,6 +1,17 @@
 """
 Modelos ORM (SQLAlchemy) do Roadmap AI.
 
+Organizado nos 3 domínios definidos na modelagem:
+  1. Core (Jornada e Planejamento): User, Goal, Roadmap, RoadmapChapter, Mission
+  2. Execução e Diário: MissionExecution
+  3. Gamificação: UserStats, Achievement, UserAchievement
+
+Nota de arquitetura: para o MVP, os modelos ORM abaixo são usados diretamente
+como estrutura de persistência. Se no futuro a lógica de negócio do domínio
+ficar complexa o suficiente para exigir entidades desacopladas do SQLAlchemy
+(puro Python, sem depender do ORM), podemos introduzir uma camada de mapeamento
+entre `domain/entities` (puras) e este módulo — mas isso seria complexidade
+prematura para o estágio atual do projeto.
 """
 
 from datetime import date, datetime
@@ -21,6 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.base import Base
+
 
 
 class User(Base):
@@ -46,6 +58,13 @@ class Goal(Base):
     target_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active")  
 
+
+    weekly_active_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True) 
+    daily_time_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    prior_knowledge_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    estimated_completion_weeks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     generation_status: Mapped[str] = mapped_column(String(20), default="pending")
     generation_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -63,6 +82,7 @@ class Roadmap(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_generation_log: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_adapted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     goal: Mapped["Goal"] = relationship(back_populates="roadmaps")
@@ -98,11 +118,14 @@ class Mission(Base):
     executions: Mapped[list["MissionExecution"]] = relationship(back_populates="mission")
 
 
+
 class MissionExecution(Base):
     __tablename__ = "mission_executions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), index=True)
+    # user_id duplicado aqui de propósito: evita JOINs caros (mission -> chapter
+    # -> roadmap -> goal -> user) para queries frequentes como "XP diário do usuário".
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     xp_rewarded: Mapped[int] = mapped_column(Integer, default=0)

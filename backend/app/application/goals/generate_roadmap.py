@@ -25,16 +25,37 @@ prever todos os capítulos futuros:
 - Objetivos de longo prazo (meses): gere só as primeiras semanas de jornada,
   terminando num checkpoint natural — o resto será gerado depois.
 
+Se o usuário informou quantos dias por semana pretende se dedicar e/ou
+quanto tempo por dia tem disponível, use isso para calibrar o ritmo real:
+- Poucos dias por semana (ex: 2-3) ou pouco tempo por dia: gere menos
+  missões por capítulo (dentro do limite abaixo) e prefira missões mais
+  curtas — não tente compensar espremendo conteúdo demais nos dias
+  disponíveis.
+- Se o usuário não informar nada, decida você mesmo um ritmo saudável e
+  sustentável, incluindo variação de intensidade entre missões (nem toda
+  missão precisa ser igualmente pesada) — construa a sensação de dias mais
+  leves dentro da própria sequência de missões.
+
+Se o usuário informou seu nível de conhecimento prévio (iniciante,
+intermediário ou avançado), calibre a profundidade e o ponto de partida:
+não repita fundamentos que a pessoa já domina.
+
 Dentro dessa primeira leva, gere quantos capítulos fizerem sentido para
 alcançar esse checkpoint de forma coerente (normalmente entre 2 e 10, mas
 use julgamento, não uma contagem fixa).
 
 Cada capítulo deve ter entre 3 e 7 missões diárias pequenas, específicas e
-realizáveis em até 60 minutos cada — esse limite de missões por capítulo é
-proposital, para manter o ritmo de progresso diário motivador.
+realizáveis dentro do tempo disponível por dia informado (ou até 60 minutos,
+se não informado) — esse limite de missões por capítulo é proposital, para
+manter o ritmo de progresso diário motivador.
 
-Também gere um título curto e motivador para o objetivo como um todo
-(máximo 60 caracteres).
+Também gere:
+- Um título curto e motivador para o objetivo como um todo (máximo 60
+  caracteres);
+- Uma estimativa de quantas semanas o objetivo completo (não só essa
+  primeira leva) deve levar para ser alcançado, no ritmo informado ou no
+  ritmo que você mesmo calibrou (campo "estimated_completion_weeks", um
+  número inteiro).
 
 Responda SOMENTE em JSON válido, sem nenhum texto antes ou depois, exatamente
 neste formato (isto é um EXEMPLO ilustrativo de estrutura, não copie o
@@ -42,6 +63,7 @@ conteúdo, gere o conteúdo real baseado no objetivo do usuário):
 
 {
   "title": "Aprenda Python do Zero",
+  "estimated_completion_weeks": 6,
   "chapters": [
     {
       "title": "Fundamentos da Linguagem",
@@ -84,8 +106,6 @@ class GenerateRoadmapUseCase:
     async def execute(self, goal_id: int) -> None:
         goal = await self.goal_repository.get_by_id(goal_id)
         if goal is None:
-            # Não deveria acontecer (o goal acabou de ser criado), mas se
-            # acontecer não há goal pra atualizar -> só encerra.
             return
 
         try:
@@ -103,12 +123,7 @@ class GenerateRoadmapUseCase:
             result = await self.ai_client.generate_json(
                 prompt=self._build_generation_prompt(goal),
                 system_instruction=ROADMAP_SYSTEM_INSTRUCTION,
-                # Sem response_schema aqui de propósito: um schema com objetos
-                # aninhados dentro de arrays (capítulo -> missões) ultrapassa
-                # o limite de complexidade do validador estruturado do
-                # Gemini ("too many states for serving"). O formato mesmo
-                # assim vem confiável porque o prompt já descreve a estrutura
-                # exata com um exemplo, e validamos abaixo em Python.
+            
             )
             self._validate_format(result)
             self._apply_safety_limits(result)
@@ -124,9 +139,10 @@ class GenerateRoadmapUseCase:
                 goal_id,
                 title=result["title"],
                 generation_status="completed",
+                estimated_completion_weeks=self._extract_estimated_weeks(result),
             )
 
-        except Exception as exc:  # noqa: BLE001 - intencional: é a "rede de segurança" final
+        except Exception as exc:  
             await self.goal_repository.update(
                 goal_id,
                 generation_status="failed",
@@ -136,13 +152,41 @@ class GenerateRoadmapUseCase:
     @staticmethod
     def _build_generation_prompt(goal) -> str:
         prompt = f"Objetivo do usuário: {goal.context_prompt}"
+
         if goal.target_date is not None:
             prompt += (
                 f"\nData-alvo desejada pelo usuário: {goal.target_date.isoformat()} "
                 f"(hoje é {date.today().isoformat()}). Use isso só para calibrar o "
                 "ritmo da primeira leva de capítulos, não para tentar planejar até lá."
             )
+
+        if goal.weekly_active_days is not None:
+            prompt += f"\nDias por semana que o usuário pretende se dedicar: {goal.weekly_active_days}."
+
+        if goal.daily_time_minutes is not None:
+            prompt += f"\nTempo disponível por dia: aproximadamente {goal.daily_time_minutes} minutos."
+
+        if goal.prior_knowledge_level is not None:
+            level_labels = {
+                "beginner": "iniciante, sem conhecimento prévio no assunto",
+                "intermediate": "conhecimento intermediário no assunto",
+                "advanced": "conhecimento avançado no assunto",
+            }
+            prompt += f"\nNível de conhecimento prévio do usuário: {level_labels[goal.prior_knowledge_level]}."
+
         return prompt
+
+    @staticmethod
+    def _extract_estimated_weeks(result: dict) -> "int | None":
+        """Campo 'bônus', não crítico -- se a IA não trouxer ou trouxer algo
+        que não é um número válido, seguimos sem quebrar a geração por causa
+        disso (diferente de 'title'/'chapters', que são essenciais)."""
+        value = result.get("estimated_completion_weeks")
+        if isinstance(value, bool):  # bool é subclasse de int em Python -- descarta explicitamente
+            return None
+        if isinstance(value, int) and value > 0:
+            return value
+        return None
 
     @staticmethod
     def _validate_format(result: dict) -> None:

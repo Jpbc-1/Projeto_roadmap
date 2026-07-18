@@ -5,7 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user
 from app.api.v1.schemas.goals import GoalCreate, GoalCreatedResponse, GoalOut
-from app.api.v1.schemas.roadmap import ChapterProgressOut, MissionProgressOut, RoadmapProgressOut
+from app.api.v1.schemas.roadmap import (
+    AdaptGoalRequest,
+    AdaptGoalResponse,
+    ChapterProgressOut,
+    MissionProgressOut,
+    RoadmapProgressOut,
+)
 from app.application.goals.create_goal import CreateGoalUseCase
 from app.application.goals.generate_roadmap import GenerateRoadmapUseCase
 from app.application.goals.get_goal import (
@@ -15,6 +21,7 @@ from app.application.goals.get_goal import (
 )
 from app.application.goals.list_goals import ListGoalsUseCase
 from app.application.goals.moderate_goal_content import ModerateGoalContentUseCase
+from app.application.roadmaps.adapt_roadmap import AdaptationFailedError, AdaptRoadmapUseCase
 from app.application.roadmaps.get_roadmap import GetRoadmapUseCase, RoadmapNotFoundError
 from app.core.ai.gemini_client import GeminiClient
 from app.core.config import settings
@@ -34,14 +41,18 @@ async def _generate_roadmap_background(goal_id: int) -> None:
     async with AsyncSessionLocal() as session:
         goal_repository = SQLAlchemyGoalRepository(session)
         roadmap_repository = SQLAlchemyRoadmapRepository(session)
-        ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_MODEL)
-        moderation_use_case = ModerateGoalContentUseCase(ai_client)
+
+        moderation_ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_MODEL)
+        moderation_use_case = ModerateGoalContentUseCase(moderation_ai_client)
+
+
+        generation_ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_PRO_MODEL)
 
         use_case = GenerateRoadmapUseCase(
             goal_repository=goal_repository,
             roadmap_repository=roadmap_repository,
             moderation_use_case=moderation_use_case,
-            ai_client=ai_client,
+            ai_client=generation_ai_client,
         )
         await use_case.execute(goal_id)
 
@@ -60,6 +71,9 @@ async def create_goal(
         user_id=current_user.id,
         context_prompt=payload.context_prompt,
         target_date=payload.target_date,
+        weekly_active_days=payload.weekly_active_days,
+        daily_time_minutes=payload.daily_time_minutes,
+        prior_knowledge_level=payload.prior_knowledge_level,
     )
 
     background_tasks.add_task(_generate_roadmap_background, goal.id)
@@ -139,4 +153,35 @@ async def get_roadmap(
             )
             for chapter in roadmap.chapters
         ],
+    )
+
+
+@router.post("/{goal_id}/adapt", response_model=AdaptGoalResponse)
+async def adapt_goal(
+    goal_id: int,
+    payload: AdaptGoalRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    goal_repository = SQLAlchemyGoalRepository(db)
+    roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_PRO_MODEL)
+    use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, ai_client)
+
+    try:
+        new_chapters_count = await use_case.execute(
+            goal_id=goal_id,
+            user_id=current_user.id,
+            feedback=payload.feedback,
+        )
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+    except RoadmapNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except AdaptationFailedError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    return AdaptGoalResponse(
+        message=f"{new_chapters_count} novo(s) capítulo(s) adicionado(s) ao seu roadmap!",
+        new_chapters_count=new_chapters_count,
     )

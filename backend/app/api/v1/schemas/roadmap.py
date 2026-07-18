@@ -16,7 +16,7 @@ class ChapterProgressOut(BaseModel):
     id: int
     title: str
     order_index: int
-    status: str 
+    status: str
     missions: List[MissionProgressOut]
 
 
@@ -24,3 +24,12 @@ class RoadmapProgressOut(BaseModel):
     id: int
     version: int
     chapters: List[ChapterProgressOut]
+
+
+class AdaptGoalRequest(BaseModel):
+    feedback: Optional[str] = None
+
+
+class AdaptGoalResponse(BaseModel):
+    message: str
+    new_chapters_count: int

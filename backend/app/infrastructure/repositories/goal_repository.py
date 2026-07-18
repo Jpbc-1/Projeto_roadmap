@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,9 @@ class SQLAlchemyGoalRepository:
         user_id: int,
         context_prompt: str,
         target_date: Optional[date],
+        weekly_active_days: Optional[int] = None,
+        daily_time_minutes: Optional[int] = None,
+        prior_knowledge_level: Optional[Literal["beginner", "intermediate", "advanced"]] = None,
     ) -> Goal:
         goal = Goal(
             user_id=user_id,
@@ -24,6 +27,9 @@ class SQLAlchemyGoalRepository:
             target_date=target_date,
             status="active",
             generation_status="pending",
+            weekly_active_days=weekly_active_days,
+            daily_time_minutes=daily_time_minutes,
+            prior_knowledge_level=prior_knowledge_level,
         )
         self.session.add(goal)
         await self.session.commit()

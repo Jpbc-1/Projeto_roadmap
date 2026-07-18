@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
@@ -17,6 +18,14 @@ class MissionAlreadyCompletedError(Exception):
     """Levantado quando o usuário já concluiu essa missão antes."""
 
 
+@dataclass
+class MissionCompletionResult:
+    execution: MissionExecution
+    roadmap_id: int
+    goal_id: int
+    chapter_completed_id: Optional[int]
+
+
 class CompleteMissionUseCase:
     def __init__(self, mission_repository: MissionRepository):
         self.mission_repository = mission_repository
@@ -26,7 +35,7 @@ class CompleteMissionUseCase:
         mission_id: int,
         user_id: int,
         user_reflection: Optional[str],
-    ) -> MissionExecution:
+    ) -> MissionCompletionResult:
         mission = await self.mission_repository.get_by_id_with_hierarchy(mission_id)
         if mission is None:
             raise MissionNotFoundError(f"Missão {mission_id} não encontrada.")
@@ -51,7 +60,7 @@ class CompleteMissionUseCase:
         )
         new_level = self._calculate_level(new_total_xp)
 
-        return await self.mission_repository.persist_completion(
+        execution = await self.mission_repository.persist_completion(
             mission_id=mission_id,
             user_id=user_id,
             xp_rewarded=xp_rewarded,
@@ -65,12 +74,19 @@ class CompleteMissionUseCase:
             activity_date=activity_date,
         )
 
+        return MissionCompletionResult(
+            execution=execution,
+            roadmap_id=mission.chapter.roadmap_id,
+            goal_id=mission.chapter.roadmap.goal_id,
+            chapter_completed_id=chapter_id_to_complete,
+        )
+
     async def _check_chapter_progress(self, mission, user_id: int, mission_id: int):
         """Decide se, com essa missão sendo concluída agora, o capítulo
         inteiro fica completo -- e se sim, qual é o próximo a desbloquear."""
         mission_ids = await self.mission_repository.get_mission_ids_in_chapter(mission.chapter_id)
         completed_ids = await self.mission_repository.get_completed_mission_ids(mission_ids, user_id)
-        completed_ids.add(mission_id)  # esta missão está prestes a ser concluída
+        completed_ids.add(mission_id)  
 
         chapter_will_be_completed = set(mission_ids) <= completed_ids
 
@@ -93,11 +109,11 @@ class CompleteMissionUseCase:
             return xp_rewarded, 1, 1, today
 
         if stats.last_activity_date == today:
-            new_streak = stats.current_streak  # já ativo hoje, streak não muda
+            new_streak = stats.current_streak  
         elif stats.last_activity_date == today - timedelta(days=1):
-            new_streak = stats.current_streak + 1  # ativo ontem -> streak continua
+            new_streak = stats.current_streak + 1  
         else:
-            new_streak = 1  # quebrou o streak -> recomeça
+            new_streak = 1  
 
         new_total_xp = stats.total_xp + xp_rewarded
         new_max_streak = max(stats.max_streak, new_streak)
