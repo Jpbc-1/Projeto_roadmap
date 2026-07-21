@@ -80,6 +80,11 @@ class RoadmapRepository(Protocol):
         para identificar os últimos capítulos concluídos)."""
         ...
 
+    async def get_missions_by_chapter(self, chapter_id: int) -> List[Any]:
+        """Lista as missões de um capítulo, com título e descrição --
+        usado pela extração de conceitos do Mapa do Conhecimento."""
+        ...
+
     async def split_chapter_with_new(
         self,
         roadmap_id: int,

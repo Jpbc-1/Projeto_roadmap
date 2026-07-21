@@ -10,6 +10,7 @@ from app.application.auth.authenticate_user import (
 from app.application.auth.register_user import (
     EmailAlreadyRegisteredError,
     RegisterUserUseCase,
+    UsernameAlreadyTakenError,
 )
 from app.core.security import create_access_token
 from app.infrastructure.database.session import get_db_session
@@ -24,8 +25,10 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db_sessio
     use_case = RegisterUserUseCase(repository)
 
     try:
-        user = await use_case.execute(email=payload.email, password=payload.password)
+        user = await use_case.execute(email=payload.email, password=payload.password, username=payload.username)
     except EmailAlreadyRegisteredError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except UsernameAlreadyTakenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     return user

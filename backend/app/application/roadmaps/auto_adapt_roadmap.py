@@ -1,8 +1,11 @@
+import logging
 from typing import Dict, List, Optional
 
 from app.application.roadmaps.adapt_roadmap import AdaptRoadmapUseCase
 from app.core.ai.gemini_client import GeminiClient
 from app.domain.repositories.roadmap_repository import RoadmapRepository
+
+logger = logging.getLogger(__name__)
 
 TRIAGE_SYSTEM_INSTRUCTION = """
 Você é um triador rápido de ritmo de aprendizado. Sua ÚNICA tarefa é ler
@@ -46,26 +49,43 @@ class AutoAdaptRoadmapUseCase:
         self.chapters_window = chapters_window
 
     async def execute(self, goal_id: int, user_id: int, roadmap_id: int) -> Optional[int]:
-        """Retorna None se decidiu não adaptar (nada mudou), ou a quantidade
-        de itens alterados se a adaptação completa foi acionada."""
-        recent_chapter_ids = await self._get_recent_completed_chapter_ids(roadmap_id)
-        if not recent_chapter_ids:
-            return None
+        """Retorna None se decidiu não adaptar (nada mudou, ou algo falhou),
+        ou a quantidade de itens alterados se a adaptação completa foi
+        acionada. NUNCA deixa uma exceção escapar -- isso roda em
+        background, sem ninguém "ouvindo" pra tratar um erro; se algo
+        quebrar aqui sem log, o usuário só vê "não adaptou sozinho" sem
+        pista nenhuma do motivo."""
+        try:
+            recent_chapter_ids = await self._get_recent_completed_chapter_ids(roadmap_id)
+            if not recent_chapter_ids:
+                logger.info("Auto-adapt: roadmap %s sem capítulos completed, nada a fazer.", roadmap_id)
+                return None
 
-        reflections = await self.roadmap_repository.get_reflections_for_chapters(
-            recent_chapter_ids, user_id
-        )
-        if not reflections:
-            # Sem nenhuma reflexão registrada -> nem vale gastar a chamada
-            # barata de triagem, não há nada pra ela analisar.
-            return None
+            reflections = await self.roadmap_repository.get_reflections_for_chapters(
+                recent_chapter_ids, user_id
+            )
+            if not reflections:
+                logger.info(
+                    "Auto-adapt: roadmap %s sem reflexões nos últimos %s capítulos, pulando triagem.",
+                    roadmap_id,
+                    self.chapters_window,
+                )
+                return None
 
-        decision = await self._triage(reflections)
-        if not decision.get("needs_adaptation"):
-            return None
+            decision = await self._triage(reflections)
+            logger.info("Auto-adapt: triagem do roadmap %s decidiu %s", roadmap_id, decision)
 
-        feedback = f"[Adaptação automática] {decision.get('reason', 'sinal detectado nas reflexões')}"
-        return await self.adapt_use_case.execute(goal_id=goal_id, user_id=user_id, feedback=feedback)
+            if not decision.get("needs_adaptation"):
+                return None
+
+            feedback = f"[Adaptação automática] {decision.get('reason', 'sinal detectado nas reflexões')}"
+            result = await self.adapt_use_case.execute(goal_id=goal_id, user_id=user_id, feedback=feedback)
+            logger.info("Auto-adapt: roadmap %s adaptado automaticamente (%s itens alterados).", roadmap_id, result)
+            return result
+
+        except Exception: 
+            logger.exception("Auto-adapt: falhou ao processar roadmap %s", roadmap_id)
+            return None
 
     async def _get_recent_completed_chapter_ids(self, roadmap_id: int) -> List[int]:
         chapters = await self.roadmap_repository.get_chapters_by_roadmap(roadmap_id)

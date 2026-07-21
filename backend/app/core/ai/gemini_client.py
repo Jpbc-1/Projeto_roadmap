@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -56,3 +56,28 @@ class GeminiClient:
             return json.loads(raw_text)
         except (KeyError, IndexError, json.JSONDecodeError) as exc:
             raise GeminiAPIError(f"Resposta do Gemini em formato inesperado: {exc}") from exc
+
+    async def embed_text(self, text: str) -> List[float]:
+        """Gera um vetor de embedding para o texto -- usado para comparar
+        similaridade semântica (ex: detectar que 'loop' e 'laço de
+        repetição' são o mesmo conceito). self.model deve ser um modelo de
+        embedding (não um modelo de geração de texto)."""
+
+        url = f"{self.BASE_URL}/{self.model}:embedContent"
+        headers = {
+            "x-goog-api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {"content": {"parts": [{"text": text}]}}
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            raise GeminiAPIError(f"Gemini (embedding) retornou {response.status_code}: {response.text[:300]}")
+
+        data = response.json()
+        try:
+            return data["embedding"]["values"]
+        except KeyError as exc:
+            raise GeminiAPIError(f"Resposta de embedding em formato inesperado: {exc}") from exc

@@ -19,6 +19,8 @@ class GoalOut(BaseModel):
     context_prompt: str
     target_date: Optional[date]
     status: str
+    category: Optional[str]
+    involves_learning: bool
     generation_status: str
     generation_error: Optional[str]
     weekly_active_days: Optional[int]

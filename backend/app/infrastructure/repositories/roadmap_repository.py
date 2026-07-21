@@ -198,13 +198,15 @@ class SQLAlchemyRoadmapRepository:
 
         old_chapter = await self.session.get(RoadmapChapter, chapter_id)
         if old_chapter is not None:
+
             old_chapter.status = "completed"
+            old_chapter.closed_early = True
 
         new_chapter = RoadmapChapter(
             roadmap_id=roadmap_id,
             title=new_chapter_title,
             order_index=new_chapter_order_index,
-            status="in_progress",  # já é o capítulo ativo -- segue direto do que fechou agora
+            status="in_progress",  
         )
         self.session.add(new_chapter)
         await self.session.flush()
@@ -226,6 +228,7 @@ class SQLAlchemyRoadmapRepository:
             select(RoadmapChapter.id).where(
                 RoadmapChapter.roadmap_id == roadmap_id,
                 RoadmapChapter.status == "completed",
+                RoadmapChapter.closed_early.is_(False),
             )
         )
         return len(result.all())
@@ -250,4 +253,8 @@ class SQLAlchemyRoadmapRepository:
         result = await self.session.execute(
             select(RoadmapChapter).where(RoadmapChapter.roadmap_id == roadmap_id)
         )
+        return list(result.scalars().all())
+
+    async def get_missions_by_chapter(self, chapter_id: int) -> List[Mission]:
+        result = await self.session.execute(select(Mission).where(Mission.chapter_id == chapter_id))
         return list(result.scalars().all())

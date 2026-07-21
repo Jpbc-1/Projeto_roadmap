@@ -16,8 +16,12 @@ class SQLAlchemyUserRepository:
         result = await self.session.execute(select(User).where(User.email == email))
         return result.scalar_one_or_none()
 
-    async def create(self, email: str, password_hash: str) -> User:
-        user = User(email=email, password_hash=password_hash)
+    async def get_by_username(self, username: str) -> Optional[User]:
+        result = await self.session.execute(select(User).where(User.username == username))
+        return result.scalar_one_or_none()
+
+    async def create(self, email: str, password_hash: str, username: str) -> User:
+        user = User(email=email, password_hash=password_hash, username=username)
         self.session.add(user)
         await self.session.commit()
         await self.session.refresh(user)

@@ -117,13 +117,14 @@ class GenerateRoadmapUseCase:
                     title="Objetivo não permitido",
                     generation_status="rejected",
                     generation_error=moderation.reason,
+                    category=moderation.category,
+                    involves_learning=moderation.involves_learning,
                 )
                 return
 
             result = await self.ai_client.generate_json(
                 prompt=self._build_generation_prompt(goal),
                 system_instruction=ROADMAP_SYSTEM_INSTRUCTION,
-            
             )
             self._validate_format(result)
             self._apply_safety_limits(result)
@@ -140,6 +141,8 @@ class GenerateRoadmapUseCase:
                 title=result["title"],
                 generation_status="completed",
                 estimated_completion_weeks=self._extract_estimated_weeks(result),
+                category=moderation.category,
+                involves_learning=moderation.involves_learning,
             )
 
         except Exception as exc:  
@@ -182,7 +185,7 @@ class GenerateRoadmapUseCase:
         que não é um número válido, seguimos sem quebrar a geração por causa
         disso (diferente de 'title'/'chapters', que são essenciais)."""
         value = result.get("estimated_completion_weeks")
-        if isinstance(value, bool):  # bool é subclasse de int em Python -- descarta explicitamente
+        if isinstance(value, bool):  
             return None
         if isinstance(value, int) and value > 0:
             return value
