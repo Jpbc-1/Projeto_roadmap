@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "frontend-mobile",
+    "slug": "frontend-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.frontendmobile.app"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.frontendmobile.app"
+    }
+  }
+}

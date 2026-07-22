@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
+from app.application.gamification.streak import calculate_streak_update
 from app.domain.repositories.mission_repository import MissionRepository
 from app.infrastructure.database.models import MissionExecution
 
@@ -54,11 +55,8 @@ class CompleteMissionUseCase:
             mission_id=mission_id,
         )
 
-        new_total_xp, new_streak, new_max_streak, activity_date = await self._calculate_gamification(
-            user_id=user_id,
-            xp_rewarded=xp_rewarded,
-        )
-        new_level = self._calculate_level(new_total_xp)
+        stats = await self.mission_repository.get_user_stats(user_id)
+        streak_update = calculate_streak_update(stats, xp_to_add=xp_rewarded, today=date.today())
 
         execution = await self.mission_repository.persist_completion(
             mission_id=mission_id,
@@ -67,11 +65,11 @@ class CompleteMissionUseCase:
             user_reflection=user_reflection,
             chapter_id_to_complete=chapter_id_to_complete,
             next_chapter_id_to_unlock=next_chapter_id_to_unlock,
-            new_total_xp=new_total_xp,
-            new_level=new_level,
-            new_current_streak=new_streak,
-            new_max_streak=new_max_streak,
-            activity_date=activity_date,
+            new_total_xp=streak_update.new_total_xp,
+            new_level=streak_update.new_level,
+            new_current_streak=streak_update.new_current_streak,
+            new_max_streak=streak_update.new_max_streak,
+            activity_date=streak_update.activity_date,
         )
 
         return MissionCompletionResult(
@@ -86,7 +84,7 @@ class CompleteMissionUseCase:
         inteiro fica completo -- e se sim, qual é o próximo a desbloquear."""
         mission_ids = await self.mission_repository.get_mission_ids_in_chapter(mission.chapter_id)
         completed_ids = await self.mission_repository.get_completed_mission_ids(mission_ids, user_id)
-        completed_ids.add(mission_id)  
+        completed_ids.add(mission_id)  # esta missão está prestes a ser concluída
 
         chapter_will_be_completed = set(mission_ids) <= completed_ids
 
@@ -99,33 +97,8 @@ class CompleteMissionUseCase:
         )
         return mission.chapter_id, next_chapter_id
 
-    async def _calculate_gamification(self, user_id: int, xp_rewarded: int):
-        """Decide XP total, streak atual e streak máximo, com base no
-        histórico de atividade do usuário."""
-        stats = await self.mission_repository.get_user_stats(user_id)
-        today = date.today()
-
-        if stats is None:
-            return xp_rewarded, 1, 1, today
-
-        if stats.last_activity_date == today:
-            new_streak = stats.current_streak  
-        elif stats.last_activity_date == today - timedelta(days=1):
-            new_streak = stats.current_streak + 1  
-        else:
-            new_streak = 1  
-
-        new_total_xp = stats.total_xp + xp_rewarded
-        new_max_streak = max(stats.max_streak, new_streak)
-        return new_total_xp, new_streak, new_max_streak, today
-
     @staticmethod
     def _calculate_xp(estimated_minutes: Optional[int]) -> int:
         """Fórmula simples de XP para o MVP: 10 pontos base + 1 por minuto
         estimado da missão. Ajustável depois conforme balanceamento de jogo."""
         return 10 + (estimated_minutes or 0)
-
-    @staticmethod
-    def _calculate_level(total_xp: int) -> int:
-        """Fórmula simples: a cada 100 XP, sobe 1 nível."""
-        return 1 + total_xp // 100

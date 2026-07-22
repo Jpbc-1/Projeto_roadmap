@@ -35,7 +35,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.infrastructure.database.base import Base
 
 
-
 class User(Base):
     __tablename__ = "users"
 
@@ -60,14 +59,15 @@ class Goal(Base):
     target_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active")  
 
-    # LEARNING | PROJECT | FITNESS | FINANCE | HABIT | CAREER | OTHER.
+
     category: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     involves_learning: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-    weekly_active_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  
+    weekly_active_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True) 
     daily_time_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     prior_knowledge_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
     estimated_completion_weeks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     generation_status: Mapped[str] = mapped_column(String(20), default="pending")
@@ -103,7 +103,7 @@ class RoadmapChapter(Base):
     roadmap_id: Mapped[int] = mapped_column(ForeignKey("roadmaps.id"), index=True)
     title: Mapped[str] = mapped_column(String(255))
     order_index: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(20), default="locked") 
+    status: Mapped[str] = mapped_column(String(20), default="locked")  
     closed_early: Mapped[bool] = mapped_column(Boolean, default=False)
 
     roadmap: Mapped["Roadmap"] = relationship(back_populates="chapters")
@@ -123,13 +123,13 @@ class Mission(Base):
     chapter: Mapped["RoadmapChapter"] = relationship(back_populates="missions")
     executions: Mapped[list["MissionExecution"]] = relationship(back_populates="mission")
 
-
-
 class MissionExecution(Base):
     __tablename__ = "mission_executions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), index=True)
+    # user_id duplicado aqui de propósito: evita JOINs caros (mission -> chapter
+    # -> roadmap -> goal -> user) para queries frequentes como "XP diário do usuário".
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     xp_rewarded: Mapped[int] = mapped_column(Integer, default=0)
@@ -137,6 +137,7 @@ class MissionExecution(Base):
     ai_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     mission: Mapped["Mission"] = relationship(back_populates="executions")
+
 
 
 class UserStats(Base):
@@ -190,7 +191,19 @@ class KnowledgeNode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     next_review_date: Mapped[date] = mapped_column(Date)
-
     interval_days: Mapped[int] = mapped_column(Integer, default=1)
     easiness_factor: Mapped[float] = mapped_column(Float, default=2.5)
     repetition_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class KnowledgeReview(Base):
+    __tablename__ = "knowledge_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    knowledge_node_id: Mapped[int] = mapped_column(ForeignKey("knowledge_nodes.id"), index=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    difficulty: Mapped[str] = mapped_column(String(10))  
+    old_interval: Mapped[int] = mapped_column(Integer)
+    new_interval: Mapped[int] = mapped_column(Integer)
+    old_factor: Mapped[float] = mapped_column(Float)
+    new_factor: Mapped[float] = mapped_column(Float)
