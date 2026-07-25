@@ -11,6 +11,14 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.frontendmobile.app"
+    },
+    "plugins": [
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fd748c85-5b88-466b-bcc0-80143bd2578f"
+      }
     }
   }
 }
