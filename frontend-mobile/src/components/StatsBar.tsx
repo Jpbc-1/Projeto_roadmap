@@ -5,44 +5,34 @@ import { colors, spacing, radius, typography } from '../theme/colors';
 
 type StatsBarProps = {
   level: number;
-  xp: number;
-  streakDays: number;
   badgeCount: number;
 };
 
 type PillProps = {
   icon: keyof typeof Ionicons.glyphMap;
-  iconColor: string;
-  tint: string;
   label: string;
 };
 
-// Text is ALWAYS textPrimary, never the accent color — color-coding lives
-// entirely in the icon. This keeps every pill readable regardless of hue,
-// and means no stat "loses" its color story to a contrast fix later.
-function StatPill({ icon, iconColor, tint, label }: PillProps) {
+// Both neutral — level and badge count are identity/status, not one of
+// the app's 5 meaningful accent systems. Text is always textPrimary,
+// never an accent color; color-coding (where it exists) lives in icons.
+function StatPill({ icon, label }: PillProps) {
   return (
-    <View style={[styles.pill, { backgroundColor: tint }]}>
-      <Ionicons name={icon} size={14} color={iconColor} />
+    <View style={styles.pill}>
+      <Ionicons name={icon} size={14} color={colors.neutralIcon} />
       <Text style={styles.pillText}>{label}</Text>
     </View>
   );
 }
 
-// Level and badge count are neutral on purpose (see theme/colors.ts) —
-// only streak and XP get a reserved accent color, since those are the two
-// mechanics this app actively wants to reinforce every day.
-export default function StatsBar({ level, xp, streakDays, badgeCount }: StatsBarProps) {
+// No raw XP total here on purpose — the product spec is explicit that
+// gamification should show evolution, not a running point count. XP still
+// shows up as a reward tag on the mission card, right when it's earned.
+export default function StatsBar({ level, badgeCount }: StatsBarProps) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.row}
-    >
-      <StatPill icon="star" iconColor={colors.neutralIcon} tint={colors.neutralTint} label={`Nível ${level}`} />
-      <StatPill icon="flash" iconColor={colors.xp} tint={colors.xpTint} label={`${xp} XP`} />
-      <StatPill icon="flame" iconColor={colors.streak} tint={colors.streakTint} label={`${streakDays} dias`} />
-      <StatPill icon="trophy" iconColor={colors.neutralIcon} tint={colors.neutralTint} label={`${badgeCount}`} />
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+      <StatPill icon="star" label={`Nível ${level}`} />
+      <StatPill icon="trophy" label={`${badgeCount} conquistas`} />
     </ScrollView>
   );
 }
@@ -61,6 +51,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
     borderRadius: radius.pill,
+    backgroundColor: colors.neutralTint,
   },
   pillText: {
     ...typography.caption,

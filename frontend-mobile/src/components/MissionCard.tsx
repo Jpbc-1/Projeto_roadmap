@@ -1,25 +1,34 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, typography } from '../theme/colors';
+import { colors, spacing, radius, typography, fonts } from '../theme/colors';
+import PushPin from './PushPin';
+import WashiTape from './WashiTape';
 
 type MissionCardProps = {
-  /** Short breadcrumb, e.g. "Capítulo 2 · Rumo ao Primeiro Estágio" */
+  /** e.g. "Cap. 3 · Python para Dados" — no "3/8": the progress bar below already covers that */
   context: string;
-  /** 0 to 1 — chapter completion, shown as "% do capítulo" instead of a mission count */
+  /** 0 to 1 — chapter completion */
   chapterProgress: number;
-  /** The big, personality-driven line — an invitation, never a guilt trip */
-  message: string;
+  /** The mission's actual name — the single most important text on this screen */
+  missionName: string;
+  /** One short sentence of context. Not a motivational line — what the mission is */
+  description: string;
   xp: number;
   minutes: number;
   onFinish: () => void;
 };
 
+// The post-it, tilted slightly like it was actually stuck on by hand —
+// not a perfectly aligned card like everything else. Yellow because
+// that's what a post-it is, and because it's the one card on the board
+// that should visually announce itself as "the important one" before
+// you've even read a word of it.
 export default function MissionCard({
   context,
   chapterProgress,
-  message,
+  missionName,
+  description,
   xp,
   minutes,
   onFinish,
@@ -27,121 +36,131 @@ export default function MissionCard({
   const pct = Math.round(Math.min(Math.max(chapterProgress, 0), 1) * 100);
 
   return (
-    // Gradient goes primary -> primaryDark. Both endpoints (and every point
-    // between) hold >=5.3:1 with white text, so text placement anywhere on
-    // this card is safe — no part of the card is a "quiet" low-contrast zone.
-    <LinearGradient
-      colors={[colors.primary, colors.primaryDark]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.card}
-    >
-      <Text style={styles.eyebrow}>{context.toUpperCase()}</Text>
+    <View style={styles.wrapper}>
+      <PushPin />
+      <WashiTape color="rgba(214,58,8,0.55)" rotation={-14} style={{ top: -8, right: 24 }} />
 
-      <View style={styles.progressRow}>
+      <View style={styles.card}>
+        <View style={styles.progressRow}>
+          <Text style={styles.eyebrow}>{context}</Text>
+          <Text style={styles.progressNumber}>{pct}%</Text>
+        </View>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${pct}%` }]} />
         </View>
-        <Text style={styles.progressLabel}>{pct}% do capítulo</Text>
-      </View>
 
-      <Text style={styles.message}>{message}</Text>
-
-      <View style={styles.metaRow}>
-        <View style={styles.metaItem}>
-          <Ionicons name="flash" size={14} color={colors.textOnPrimary} />
-          <Text style={styles.metaText}>{xp} XP</Text>
+        <View style={styles.tagRow}>
+          <View style={[styles.tag, { backgroundColor: colors.xpTint }]}>
+            <Text style={[styles.tagText, { color: colors.xp }]}>+{xp} XP</Text>
+          </View>
+          <View style={[styles.tag, { backgroundColor: 'rgba(31,22,12,0.08)' }]}>
+            <Ionicons name="time-outline" size={12} color={colors.textOnWoodMuted} />
+            <Text style={[styles.tagText, { color: colors.textOnWoodMuted }]}>{minutes} min</Text>
+          </View>
         </View>
-        <View style={styles.metaDot} />
-        <View style={styles.metaItem}>
-          <Ionicons name="time-outline" size={14} color={colors.textOnPrimary} />
-          <Text style={styles.metaText}>{minutes} min</Text>
-        </View>
-      </View>
 
-      <TouchableOpacity
-        style={styles.button}
-        onPress={onFinish}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Finalizar missão"
-      >
-        <Ionicons name="checkmark-circle" size={18} color={colors.textOnPrimary} />
-        <Text style={styles.buttonText}>Finalizar missão</Text>
-      </TouchableOpacity>
-    </LinearGradient>
+        <Text style={styles.missionName}>{missionName}</Text>
+        <Text style={styles.description}>{description}</Text>
+
+        <TouchableOpacity
+          style={styles.button}
+          onPress={onFinish}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Começar missão"
+        >
+          <Ionicons name="rocket" size={18} color={colors.textOnPrimary} />
+          <Text style={styles.buttonText}>Começar Missão</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    marginTop: spacing.lg + spacing.sm,
+    transform: [{ rotate: '-1.5deg' }],
+  },
   card: {
-    borderRadius: radius.lg,
+    backgroundColor: colors.postIt.yellow,
+    borderRadius: radius.sm,
     padding: spacing.md,
-    marginTop: spacing.md,
+    // A flat, hard-edged shadow (not a soft blurred one) reads more like
+    // a physical sheet of paper lifted slightly off the board.
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  progressRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
   },
   eyebrow: {
     ...typography.eyebrow,
-    color: colors.textOnPrimary,
-    marginBottom: spacing.sm,
+    color: colors.textSecondaryOnPastel,
+    flexShrink: 1,
   },
-  progressRow: {
-    marginBottom: spacing.md,
+  progressNumber: {
+    fontFamily: fonts.display,
+    fontSize: 16,
+    color: colors.success,
   },
   progressTrack: {
     height: spacing.sm,
     borderRadius: radius.pill,
-    backgroundColor: colors.overlayOnPrimary,
-    marginBottom: spacing.sm,
+    backgroundColor: 'rgba(31,22,12,0.12)',
+    marginBottom: spacing.md,
   },
   progressFill: {
     height: spacing.sm,
     borderRadius: radius.pill,
-    backgroundColor: colors.textOnPrimary,
+    backgroundColor: colors.success,
   },
-  progressLabel: {
-    ...typography.caption,
-    color: colors.textOnPrimary,
-  },
-  message: {
-    ...typography.h1,
-    fontSize: 24,
-    lineHeight: 30,
-    color: colors.textOnPrimary,
-    marginBottom: spacing.md,
-  },
-  metaRow: {
+  tagRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    gap: spacing.sm,
     marginBottom: spacing.md,
   },
-  metaItem: {
+  tag: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
   },
-  metaText: {
+  tagText: {
     ...typography.caption,
-    color: colors.textOnPrimary,
+    fontSize: 12,
   },
-  metaDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: colors.textOnPrimary,
-    marginHorizontal: spacing.sm,
+  missionName: {
+    ...typography.missionName,
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+  },
+  description: {
+    ...typography.body,
+    color: colors.textSecondaryOnPastel,
+    marginBottom: spacing.md,
   },
   button: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.success,
+    backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     borderRadius: radius.md,
-    minHeight: 48,
+    minHeight: 56,
   },
   buttonText: {
-    ...typography.h2,
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 16,
     color: colors.textOnPrimary,
   },
 });

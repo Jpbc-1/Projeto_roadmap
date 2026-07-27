@@ -1,136 +1,137 @@
-import React, { useState } from 'react';
-import { View, Text, Image, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, typography } from '../theme/colors';
-import StatsBar from '../components/StatsBar';
+import { colors, spacing, radius, typography, fonts, touchTarget } from '../theme/colors';
+import HomeHeader from '../components/HomeHeader';
 import MissionCard from '../components/MissionCard';
 import StreakProgress from '../components/StreakProgress';
-import CourseCard from '../components/CourseCard';
-import TodayItem from '../components/TodayItem';
-import BottomNav from '../components/BottomNav';
+import StudyReminder from '../components/StudyReminder';
+import ReviewCard from '../components/ReviewCard';
+import MilestoneCard from '../components/MilestoneCard';
+import RoadmapCard from '../components/RoadmapCard';
+import WoodBackground from '../components/WoodBackground';
+
+// Other active roadmaps, each with its own mission for today. The
+// featured roadmap (Python) already has the spotlight via the hero
+// MissionCard above — it doesn't get a second, redundant card down here.
+// Capped at 2: enough to show there's more to do today without it
+// reading like a to-do list.
+const OTHER_ROADMAPS = [
+  {
+    key: 'sql',
+    roadmapTitle: 'SQL para Iniciantes',
+    todayMission: 'Joins e relacionamentos',
+    description: 'Una tabelas e cruze informações com SQL.',
+    minutes: 14,
+    progress: 0.72,
+  },
+  {
+    key: 'estatistica',
+    roadmapTitle: 'Estatística Básica',
+    todayMission: 'Média, mediana e moda',
+    description: 'Entenda as medidas de tendência central na prática.',
+    minutes: 10,
+    progress: 0.3,
+  },
+];
 
 export default function DashboardScreen() {
-  const [activeTab, setActiveTab] = useState('inicio');
-
   return (
-    // Only the top edge here — the bottom edge's safe-area inset is handled
-    // inside BottomNav itself, so the tab bar can sit flush against it
-    // instead of leaving a double gap.
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <WoodBackground>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.headerRow}>
-          <Image source={{ uri: 'https://i.pravatar.cc/100?img=47' }} style={styles.avatar} />
-          <Text style={styles.greeting}>Bom dia, Helena</Text>
-        </View>
-        <StatsBar level={12} xp={420} streakDays={8} badgeCount={3} />
+        <HomeHeader
+        name="Helena"
+        avatarEmoji="🦊"
+        streakDays={8}
+        level={12}
+        hasUnreadNotification
+      />
 
-        <MissionCard
-          context="Capítulo 2 · Rumo ao Primeiro Estágio"
-          chapterProgress={0.6}
-          message="Bora pra missão de hoje! 👀"
-          xp={35}
-          minutes={15}
-          onFinish={() => {}}
+      {/* The one question this screen answers: "qual é minha próxima
+          missão?" — everything below is supporting context, deliberately
+          quieter than this card. */}
+      <MissionCard
+        context="Cap. 3 · Python para Dados"
+        chapterProgress={0.45}
+        missionName="Carregar e explorar seu primeiro DataFrame"
+        description="Abra um CSV real com pandas e descubra o que está escondido nos dados."
+        xp={80}
+        minutes={15}
+        onFinish={() => {}}
+      />
+
+      <StreakProgress currentStreak={8} nextMilestone={30} freezesAvailable={2} />
+
+      <StudyReminder time="19:00" label="Sessão de estudos" />
+
+      {/* Reviews aren't tied to any single roadmap — they pull from
+          everything the person has learned across all of them. */}
+      <View style={styles.reviewWrapper}>
+        <ReviewCard pendingCount={2} />
+      </View>
+
+      <MilestoneCard title="Concluir o Capítulo 3" missionsDone={4} missionsTotal={9} xpReward={500} />
+
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Suas outras missões</Text>
+      </View>
+      {OTHER_ROADMAPS.map((roadmap) => (
+        <RoadmapCard
+          key={roadmap.key}
+          roadmapTitle={roadmap.roadmapTitle}
+          todayMission={roadmap.todayMission}
+          description={roadmap.description}
+          minutes={roadmap.minutes}
+          progress={roadmap.progress}
         />
+      ))}
 
-        <StreakProgress currentStreak={8} nextMilestone={30} freezesAvailable={2} />
-
-        {/* Reviews are the one thing here that isn't already a roadmap
-            mission — every card under "Crescendo aos poucos" already IS
-            that roadmap's mission for today (title = roadmap, subtitle =
-            today's specific mission in it), so it doesn't get duplicated
-            here too. No section header needed for a single self-explanatory
-            row — tapping it goes straight to the review queue. */}
-        <View style={styles.todayReview}>
-          <TodayItem icon="repeat-outline" title="Revisão espaçada" meta="3 itens pendentes" />
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Crescendo aos poucos</Text>
-          <TouchableOpacity
-            style={styles.sectionLinkButton}
-            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel="Ver todas as trilhas"
-          >
-            <Text style={styles.sectionLink}>Ver todos</Text>
-            <Ionicons name="chevron-forward" size={14} color={colors.primary} />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.courseRow}>
-          <CourseCard
-            accent="blue"
-            icon="code-slash-outline"
-            title="Domine o Python"
-            subtitle="Aprenda Dicionário"
-            progress={0.4}
-          />
-          <CourseCard
-            accent="teal"
-            icon="trending-up-outline"
-            title="Aprenda a investir"
-            subtitle="Aprenda sobre CDB"
-            progress={0.2}
-          />
-        </View>
+      <TouchableOpacity
+        style={styles.viewAllButton}
+        accessibilityRole="button"
+        accessibilityLabel="Ver todos os seus roadmaps"
+      >
+        <Text style={styles.viewAllText}>Ver todos os roadmaps</Text>
+        <Ionicons name="arrow-forward" size={16} color={colors.textPrimary} />
+      </TouchableOpacity>
       </ScrollView>
-
-      <BottomNav active={activeTab} onSelect={setActiveTab} />
-    </SafeAreaView>
+    </WoodBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   content: {
     padding: spacing.md,
     paddingBottom: spacing.xl,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-  },
-  greeting: {
-    ...typography.greeting,
-    color: colors.textPrimary,
+  reviewWrapper: {
+    marginTop: spacing.md,
   },
   sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     marginTop: spacing.lg,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   sectionTitle: {
-    ...typography.h1,
-    fontSize: 18,
-    color: colors.textPrimary,
+    ...typography.sectionTitle,
+    fontSize: 16,
+    color: colors.textOnWoodMuted,
   },
-  sectionLinkButton: {
+  viewAllButton: {
     flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
     gap: spacing.sm,
-  },
-  sectionLink: {
-    ...typography.caption,
-    color: colors.primary,
-    fontWeight: '700',
-  },
-  courseRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
-  todayReview: {
+    minHeight: touchTarget,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
+  },
+  viewAllText: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 14,
+    color: colors.textPrimary,
   },
 });

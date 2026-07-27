@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, spacing, typography, touchTarget } from '../theme/colors';
+import { colors, spacing, typography, fonts, touchTarget } from '../theme/colors';
 
 type NavItem = {
   key: string;
@@ -37,7 +37,7 @@ export default function BottomNav({ active, onSelect }: BottomNavProps) {
     <View style={[styles.bar, { paddingBottom: insets.bottom + spacing.sm }]}>
       {items.map((item) => {
         const isActive = item.key === active;
-        const tint = isActive ? colors.primary : colors.textSecondary;
+        const tint = isActive ? colors.primaryText : colors.textSecondary;
         return (
           <TouchableOpacity
             key={item.key}
@@ -48,7 +48,9 @@ export default function BottomNav({ active, onSelect }: BottomNavProps) {
             accessibilityLabel={item.label}
           >
             <Ionicons name={isActive ? item.iconFilled : item.iconOutline} size={22} color={tint} />
-            <Text style={[styles.label, { color: tint, fontWeight: isActive ? '700' : '500' }]}>{item.label}</Text>
+            <Text style={[styles.label, { color: tint, fontFamily: isActive ? fonts.bodySemiBold : fonts.bodyMedium }]}>
+              {item.label}
+            </Text>
           </TouchableOpacity>
         );
       })}
