@@ -1,9 +1,11 @@
 from datetime import date
 
-from app.application.goals.moderate_goal_content import ModerateGoalContentUseCase
 from app.core.ai.gemini_client import GeminiClient
+from app.core.config import settings
 from app.domain.repositories.goal_repository import GoalRepository
+from app.domain.repositories.recommendation_repository import RecommendationRepository
 from app.domain.repositories.roadmap_repository import RoadmapRepository
+from app.domain.repositories.user_repository import UserRepository
 
 ROADMAP_SYSTEM_INSTRUCTION = """
 Você é a IA do Roadmap AI, um aplicativo que transforma objetivos grandes em
@@ -49,13 +51,43 @@ realizáveis dentro do tempo disponível por dia informado (ou até 60 minutos,
 se não informado) — esse limite de missões por capítulo é proposital, para
 manter o ritmo de progresso diário motivador.
 
+Para CADA missão, classifique também se ela é CONCEITUAL (envolve aprender e
+reter um conceito, fato, terminologia ou técnica — algo que faz sentido
+revisar depois) ou uma AÇÃO PRÁTICA/de configuração (uma tarefa que, uma vez
+feita, não precisa ser "relembrada" — ex: "instale o Python", "configure seu
+ambiente", "abra uma conta em uma corretora", "monte seu currículo"). Marque
+isso no campo booleano "is_conceptual" de cada missão — isso decide se ela
+entra no sistema de revisão espaçada depois, então não marque true por
+padrão sem pensar: a maioria das missões do primeiro capítulo de setup
+costuma ser false.
+
 Também gere:
-- Um título curto e motivador para o objetivo como um todo (máximo 60
-  caracteres);
+- Um título curto e motivador para o objetivo como um todo (máximo 40
+  caracteres — precisa caber bem em telas pequenas do app, então prefira
+  algo direto: "Aprenda Python", não "Um Guia Completo Para Aprender Python
+  do Absoluto Zero");
+- Títulos de capítulo também curtos (máximo 40 caracteres), mas ainda
+  específicos o bastante para a pessoa entender do que se trata sem abrir o
+  capítulo;
 - Uma estimativa de quantas semanas o objetivo completo (não só essa
   primeira leva) deve levar para ser alcançado, no ritmo informado ou no
   ritmo que você mesmo calibrou (campo "estimated_completion_weeks", um
   número inteiro).
+
+IMPORTANTE sobre a primeiríssima missão do roadmap (a missão 1 do capítulo
+1): ela deve ser propositalmente curta e fácil — bem mais rápida que a
+média das outras (ex: 5 a 10 minutos), mesmo que isso quebre um pouco a
+progressão natural de dificuldade. É a primeira coisa que a pessoa vai
+fazer no app, então o objetivo dela é dar uma vitória rápida e gerar
+motivação para continuar, não testar a pessoa.
+
+Por fim, sugira de 0 a 3 recursos PAGOS e de 0 a 3 recursos GRATUITOS
+(apps, cursos, livros, comunidades, ferramentas, canais) que ajudariam
+especificamente NESSE objetivo -- só inclua algo que você tenha confiança
+real que existe de verdade e é relevante; é preferível devolver menos itens
+(ou nenhum) do que preencher a lista com algo genérico ou inventado. NÃO
+inclua links/URLs -- eles não são confiáveis vindos de você; só o nome do
+recurso e uma frase curta de por que ajuda, campo "recommendations".
 
 Responda SOMENTE em JSON válido, sem nenhum texto antes ou depois, exatamente
 neste formato (isto é um EXEMPLO ilustrativo de estrutura, não copie o
@@ -68,13 +100,65 @@ conteúdo, gere o conteúdo real baseado no objetivo do usuário):
     {
       "title": "Fundamentos da Linguagem",
       "missions": [
-        {"title": "Instale o Python", "description": "Configure seu ambiente de desenvolvimento", "estimated_minutes": 20},
-        {"title": "Variáveis e tipos", "description": "Aprenda os tipos básicos de dados", "estimated_minutes": 30}
+        {"title": "Instale o Python", "description": "Configure seu ambiente de desenvolvimento", "estimated_minutes": 20, "is_conceptual": false},
+        {"title": "Variáveis e tipos", "description": "Aprenda os tipos básicos de dados", "estimated_minutes": 30, "is_conceptual": true}
       ]
     }
+  ],
+  "recommendations": [
+    {"name": "Codecademy Python", "description": "Curso interativo com exercícios no navegador", "is_paid": true},
+    {"name": "python.org/docs", "description": "Documentação oficial, referência gratuita e completa", "is_paid": false}
   ]
 }
 """
+
+# Orientação extra injetada no prompt conforme a categoria do objetivo
+# (definida pela moderação, ver moderate_goal_content.py). Cada uma ataca um
+# viés comum da IA nessa categoria -- ex: em FITNESS ela tende a ensinar
+# teoria/anatomia que ninguém pediu; em CAREER ela tende a esquecer o lado
+# prático (currículo, entrevista) e só ensinar conteúdo técnico. Categorias
+# sem entrada aqui (LEARNING, PROJECT, OTHER) usam só a instrução geral --
+# não precisam de correção de viés específica.
+CATEGORY_GUIDANCE = {
+    "FITNESS": """
+Este objetivo é de FITNESS. A pessoa quer resultado físico e organização de
+rotina, não uma aula de biologia. NÃO crie missões de teoria/anatomia que
+não mudam a ação prática do dia a dia (ex: nada de "aprenda os grupos
+musculares" ou "entenda a fisiologia da hipertrofia" como missão própria).
+Priorize: um plano de treino estruturado e progressivo, organização de
+rotina (frequência, dias de descanso), orientação prática de alimentação
+(não bioquímica) e, no máximo, alguma missão de medição/acompanhamento
+(peso, medidas, fotos de progresso). Um conceito só vale virar missão
+quando muda a execução na hora (ex: "o que é progressão de carga" pode
+valer a pena porque a pessoa aplica isso todo treino); teoria que não leva
+a nenhuma ação não deve virar missão.
+""",
+    "CAREER": """
+Este objetivo é de CARREIRA. Inclua missões práticas de carreira (montar/
+revisar currículo, LinkedIn, portfólio, prática de entrevista, networking)
+-- mas SEM cortar o aprendizado técnico necessário para o objetivo: se a
+pessoa quer "conseguir vaga de dados", ela ainda precisa aprender SQL/Python
+de verdade, currículo bom não substitui competência real. Equilibre bem os
+dois: normalmente os capítulos iniciais focam mais em construir a
+habilidade em si, e os capítulos finais (mais perto de aplicar para vagas)
+trazem as missões de currículo/entrevista/networking.
+""",
+    "FINANCE": """
+Este objetivo é de FINANÇAS. Equilibre teoria e prática: conceitos
+essenciais (ex: juros compostos, tipos de investimento, como funciona
+determinado produto financeiro) valem a pena quando embasam uma decisão
+real, mas sempre amarrados a uma ação concreta na sequência (montar
+orçamento, abrir conta em corretora, categorizar gastos, definir reserva de
+emergência). Evite teoria de economia que não leva a nenhuma decisão
+prática.
+""",
+    "HABIT": """
+Este objetivo é de HÁBITO. O foco é execução e consistência, não teoria
+sobre por que o hábito é bom. Priorize missões de ação direta (fazer a
+coisa, registrar, ajustar o ambiente/gatilhos que causam o comportamento) e
+evite missões puramente conceituais/explicativas.
+""",
+}
 
 
 class RoadmapFormatError(Exception):
@@ -82,25 +166,31 @@ class RoadmapFormatError(Exception):
 
 
 class GenerateRoadmapUseCase:
-    """Orquestra: moderação -> geração -> persistência.
+    """Gera o roadmap propriamente dito e persiste. Pressupõe que a
+    moderação e a triagem inicial (IntakeGoalUseCase) já rodaram antes --
+    quem enfileira este job (o handler "intake_goal") só faz isso depois de
+    confirmar que o objetivo é seguro e tem informação suficiente. Ver
+    app/core/jobs/handlers.py.
 
     Contrato importante: este caso de uso NUNCA deixa uma exceção escapar.
     Ele sempre termina atualizando o goal para um estado definitivo
-    (completed | rejected | failed), porque quem o chama é uma tarefa em
-    background — se uma exceção escapasse aqui, ninguém estaria "ouvindo"
-    pra tratar o erro, e o goal ficaria preso em "pending" para sempre.
+    (completed | failed), porque quem o chama é uma tarefa em background —
+    se uma exceção escapasse aqui, ninguém estaria "ouvindo" pra tratar o
+    erro, e o goal ficaria preso em "pending" para sempre.
     """
 
     def __init__(
         self,
         goal_repository: GoalRepository,
         roadmap_repository: RoadmapRepository,
-        moderation_use_case: ModerateGoalContentUseCase,
+        recommendation_repository: RecommendationRepository,
+        user_repository: UserRepository,
         ai_client: GeminiClient,
     ):
         self.goal_repository = goal_repository
         self.roadmap_repository = roadmap_repository
-        self.moderation_use_case = moderation_use_case
+        self.recommendation_repository = recommendation_repository
+        self.user_repository = user_repository
         self.ai_client = ai_client
 
     async def execute(self, goal_id: int) -> None:
@@ -109,19 +199,6 @@ class GenerateRoadmapUseCase:
             return
 
         try:
-            moderation = await self.moderation_use_case.execute(goal.context_prompt)
-
-            if not moderation.is_safe:
-                await self.goal_repository.update(
-                    goal_id,
-                    title="Objetivo não permitido",
-                    generation_status="rejected",
-                    generation_error=moderation.reason,
-                    category=moderation.category,
-                    involves_learning=moderation.involves_learning,
-                )
-                return
-
             result = await self.ai_client.generate_json(
                 prompt=self._build_generation_prompt(goal),
                 system_instruction=ROADMAP_SYSTEM_INSTRUCTION,
@@ -136,25 +213,46 @@ class GenerateRoadmapUseCase:
                 chapters_data=result["chapters"],
             )
 
+            recommendations_data = result.get("recommendations")
+            if isinstance(recommendations_data, list) and recommendations_data:
+                # Não deixa a IA exagerar: no máximo 3 pagas + 3 gratuitas
+                # de propósito (pedido no prompt), isso aqui é só uma trava
+                # técnica de segurança, igual _apply_safety_limits.
+                await self.recommendation_repository.bulk_create(goal.id, recommendations_data[:6])
+
             await self.goal_repository.update(
                 goal_id,
                 title=result["title"],
                 generation_status="completed",
                 estimated_completion_weeks=self._extract_estimated_weeks(result),
-                category=moderation.category,
-                involves_learning=moderation.involves_learning,
             )
 
         except Exception as exc:  
+            # Se a exceção veio de uma falha de banco dentro do bloco try
+            # (ex: create_full_roadmap com um tipo inesperado vindo da IA),
+            # a sessão fica "suja" e precisa de rollback antes de aceitar
+            # qualquer novo comando -- inclusive este update de status, que
+            # senão falharia também, deixando o goal preso em "pending"
+            # para sempre (o job já não tenta de novo depois de esgotar as
+            # tentativas, e ninguém mais vai atualizar esse goal).
+            await self.goal_repository.rollback()
             await self.goal_repository.update(
                 goal_id,
                 generation_status="failed",
                 generation_error=str(exc),
             )
+            # A geração não aconteceu de verdade -- devolve o crédito já
+            # cobrado em POST /goals (ver goals.py).
+            await self.user_repository.refund_credits(goal.user_id, settings.CREDITS_COST_GENERATE_ROADMAP)
 
     @staticmethod
     def _build_generation_prompt(goal) -> str:
-        prompt = f"Objetivo do usuário: {goal.context_prompt}"
+        # improved_prompt é o context_prompt original com clareza/gramática
+        # melhoradas pela triagem inicial (e possivelmente enriquecido com
+        # respostas às perguntas de esclarecimento) -- cai pro original se,
+        # por algum motivo, a triagem não tiver rodado.
+        effective_prompt = goal.improved_prompt or goal.context_prompt
+        prompt = f"Objetivo do usuário: {effective_prompt}"
 
         if goal.target_date is not None:
             prompt += (
@@ -176,6 +274,10 @@ class GenerateRoadmapUseCase:
                 "advanced": "conhecimento avançado no assunto",
             }
             prompt += f"\nNível de conhecimento prévio do usuário: {level_labels[goal.prior_knowledge_level]}."
+
+        category_guidance = CATEGORY_GUIDANCE.get(goal.category)
+        if category_guidance:
+            prompt += f"\n{category_guidance}"
 
         return prompt
 

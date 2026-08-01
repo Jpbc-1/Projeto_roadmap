@@ -1,70 +1,91 @@
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user
-from app.api.v1.schemas.goals import GoalCreate, GoalCreatedResponse, GoalOut
+from app.api.v1.schemas.goals import (
+    GoalAnswersRequest,
+    GoalCreate,
+    GoalCreatedResponse,
+    GoalOut,
+    RecommendationOut,
+)
+from app.api.v1.schemas.knowledge import CreateKnowledgeNodeRequest, KnowledgeNodeOut
 from app.api.v1.schemas.roadmap import (
     AdaptGoalRequest,
     AdaptGoalResponse,
+    ChapterCreateRequest,
+    ChapterLockRequest,
     ChapterProgressOut,
     MissionProgressOut,
     RoadmapProgressOut,
 )
+from app.application.goals.answer_goal_questions import AnswerGoalQuestionsUseCase, GoalNotAwaitingInfoError
 from app.application.goals.create_goal import CreateGoalUseCase
-from app.application.goals.generate_roadmap import GenerateRoadmapUseCase
 from app.application.goals.get_goal import (
     GetGoalUseCase,
     GoalAccessDeniedError,
     GoalNotFoundError,
 )
 from app.application.goals.list_goals import ListGoalsUseCase
-from app.application.goals.moderate_goal_content import ModerateGoalContentUseCase
 from app.application.roadmaps.adapt_roadmap import AdaptationFailedError, AdaptRoadmapUseCase
+from app.application.roadmaps.confirm_adaptation import (
+    AdaptationOperationNoLongerValidError,
+    ConfirmAdaptationUseCase,
+    NoPendingAdaptationError,
+    RejectAdaptationUseCase,
+)
+from app.application.roadmaps.create_chapter import (
+    CannotInsertAfterCompletedChapterError,
+    ChapterNotFoundError,
+    CreateChapterUseCase,
+)
 from app.application.roadmaps.get_roadmap import GetRoadmapUseCase, RoadmapNotFoundError
+from app.application.roadmaps.propose_chapter_operation import ProposeChapterOperationUseCase
+from app.application.roadmaps.set_chapter_lock import SetChapterLockUseCase
+from app.application.knowledge.create_knowledge_node import CreateKnowledgeNodeUseCase
+from app.application.knowledge.spaced_repetition import compute_mastery_level
 from app.core.ai.gemini_client import GeminiClient
+from app.core.ai.usage_logging import UsageCollector
 from app.core.config import settings
 from app.infrastructure.database.models import User
-from app.infrastructure.database.session import AsyncSessionLocal, get_db_session
+from app.infrastructure.database.session import get_db_session
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
+from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
+from app.infrastructure.repositories.knowledge_node_repository import SQLAlchemyKnowledgeNodeRepository
 from app.infrastructure.repositories.mission_repository import SQLAlchemyMissionRepository
+from app.infrastructure.repositories.recommendation_repository import SQLAlchemyRecommendationRepository
 from app.infrastructure.repositories.roadmap_repository import SQLAlchemyRoadmapRepository
+from app.infrastructure.repositories.user_repository import SQLAlchemyUserRepository
 
 router = APIRouter()
-
-
-async def _generate_roadmap_background(goal_id: int) -> None:
-    """Roda fora do ciclo da requisição HTTP -> precisa da SUA PRÓPRIA sessão
-    de banco, já que a sessão da requisição original já foi fechada quando
-    a resposta do POST /goals foi enviada ao cliente."""
-    async with AsyncSessionLocal() as session:
-        goal_repository = SQLAlchemyGoalRepository(session)
-        roadmap_repository = SQLAlchemyRoadmapRepository(session)
-
-        moderation_ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_MODEL)
-        moderation_use_case = ModerateGoalContentUseCase(moderation_ai_client)
-
-
-        generation_ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_PRO_MODEL)
-
-        use_case = GenerateRoadmapUseCase(
-            goal_repository=goal_repository,
-            roadmap_repository=roadmap_repository,
-            moderation_use_case=moderation_use_case,
-            ai_client=generation_ai_client,
-        )
-        await use_case.execute(goal_id)
 
 
 @router.post("", response_model=GoalCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_goal(
     payload: GoalCreate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
+    user_repository = SQLAlchemyUserRepository(db)
+
+    # Cobra ANTES de criar qualquer coisa -- se não tiver crédito, nem cria
+    # o Goal (evita registro "fantasma" que nunca vai gerar roadmap mesmo).
+    charged = await user_repository.try_deduct_credits(
+        current_user.id, settings.CREDITS_COST_GENERATE_ROADMAP
+    )
+    if not charged:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=(
+                f"Créditos insuficientes (precisa de {settings.CREDITS_COST_GENERATE_ROADMAP}) "
+                "para criar um novo objetivo."
+            ),
+        )
+
     repository = SQLAlchemyGoalRepository(db)
+    job_repository = SQLAlchemyJobRepository(db)
     use_case = CreateGoalUseCase(repository)
 
     goal = await use_case.execute(
@@ -76,7 +97,12 @@ async def create_goal(
         prior_knowledge_level=payload.prior_knowledge_level,
     )
 
-    background_tasks.add_task(_generate_roadmap_background, goal.id)
+    # Antes ia direto pra BackgroundTasks (perdido se o processo reiniciar
+    # no meio); agora entra na fila (background_jobs) processada pelo
+    # worker em app/core/jobs/worker.py. "intake_goal" modera + melhora o
+    # prompt + detecta info faltando, e só ENTÃO encadeia "generate_roadmap"
+    # -- ver app/core/jobs/handlers.py.
+    await job_repository.enqueue("intake_goal", {"goal_id": goal.id}, user_id=current_user.id)
 
     return GoalCreatedResponse(
         goal=goal,
@@ -112,6 +138,52 @@ async def get_goal(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
 
 
+@router.post("/{goal_id}/answers", status_code=status.HTTP_202_ACCEPTED)
+async def answer_goal_questions(
+    goal_id: int,
+    payload: GoalAnswersRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Responde às perguntas de esclarecimento da triagem inicial (quando
+    GET /goals/{id} mostra generation_status="awaiting_info" e
+    pending_questions preenchido). Depois de respondido, a geração do
+    roadmap é enfileirada de verdade."""
+    goal_repository = SQLAlchemyGoalRepository(db)
+    job_repository = SQLAlchemyJobRepository(db)
+    use_case = AnswerGoalQuestionsUseCase(goal_repository)
+
+    try:
+        await use_case.execute(goal_id=goal_id, user_id=current_user.id, answers=payload.answers)
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+    except GoalNotAwaitingInfoError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    await job_repository.enqueue("generate_roadmap", {"goal_id": goal_id}, user_id=current_user.id)
+
+    return {"message": "Respostas recebidas! Estamos montando seu roadmap."}
+
+
+@router.get("/{goal_id}/recommendations", response_model=List[RecommendationOut])
+async def get_recommendations(
+    goal_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Recursos (apps, cursos, livros, comunidades) sugeridos pela IA junto
+    com a geração inicial do roadmap -- lista vazia é normal (a IA só
+    sugere quando tem confiança real, ver generate_roadmap.py)."""
+    goal_repository = SQLAlchemyGoalRepository(db)
+    recommendation_repository = SQLAlchemyRecommendationRepository(db)
+
+    goal = await goal_repository.get_by_id(goal_id)
+    if goal is None or goal.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+
+    return await recommendation_repository.get_by_goal(goal_id)
+
+
 @router.get("/{goal_id}/roadmap", response_model=RoadmapProgressOut)
 async def get_roadmap(
     goal_id: int,
@@ -130,15 +202,29 @@ async def get_roadmap(
     except RoadmapNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
+    # Capítulo/missão "atuais" calculados aqui pra o front não precisar
+    # varrer chapters/missions procurando o primeiro não concluído.
+    current_chapter = next((c for c in roadmap.chapters if c.status == "in_progress"), None)
+    current_mission_id = None
+    if current_chapter is not None:
+        current_mission = next(
+            (m for m in current_chapter.missions if m.id not in completed_mission_ids), None
+        )
+        current_mission_id = current_mission.id if current_mission is not None else None
+
     return RoadmapProgressOut(
         id=roadmap.id,
         version=roadmap.version,
+        current_chapter_id=current_chapter.id if current_chapter is not None else None,
+        current_mission_id=current_mission_id,
         chapters=[
             ChapterProgressOut(
                 id=chapter.id,
                 title=chapter.title,
                 order_index=chapter.order_index,
                 status=chapter.status,
+                created_by=chapter.created_by,
+                is_locked_from_ai=chapter.is_locked_from_ai,
                 missions=[
                     MissionProgressOut(
                         id=mission.id,
@@ -147,6 +233,8 @@ async def get_roadmap(
                         estimated_minutes=mission.estimated_minutes,
                         order_index=mission.order_index,
                         completed=mission.id in completed_mission_ids,
+                        is_conceptual=mission.is_conceptual,
+                        created_by=mission.created_by,
                     )
                     for mission in chapter.missions
                 ],
@@ -165,23 +253,229 @@ async def adapt_goal(
 ):
     goal_repository = SQLAlchemyGoalRepository(db)
     roadmap_repository = SQLAlchemyRoadmapRepository(db)
-    ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_PRO_MODEL)
-    use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, ai_client)
+    user_repository = SQLAlchemyUserRepository(db)
+
+    # Confere posse ANTES de cobrar -- pedido pra um objetivo que não
+    # existe ou não é do usuário não deve custar crédito nenhum.
+    goal = await goal_repository.get_by_id(goal_id)
+    if goal is None or goal.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+
+    charged = await user_repository.try_deduct_credits(current_user.id, settings.CREDITS_COST_ADAPT)
+    if not charged:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=f"Créditos insuficientes (precisa de {settings.CREDITS_COST_ADAPT}) para adaptar o roadmap.",
+        )
+
+    usage = UsageCollector(user_id=current_user.id)
 
     try:
-        new_chapters_count = await use_case.execute(
+        # Primeira parada: o feedback mira um capítulo específico? Se sim, a
+        # IA já gera a operação mas NÃO aplica -- vira uma proposta pendente
+        # que precisa de POST /adapt/confirm (ou /adapt/reject) pra virar de
+        # fato. Propor operação de capítulo é adaptação -- mesmo nível de
+        # criar (pro -> médio -> fraco): gera conteúdo novo de qualidade
+        # equivalente.
+        proposal_ai_client = GeminiClient(
+            api_key=settings.GEMINI_API_KEY,
+            model=settings.GEMINI_PRO_MODEL,
+            fallback_models=[settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL],
+            on_usage=usage.logger_for("propose_chapter_operation"),
+        )
+        propose_use_case = ProposeChapterOperationUseCase(
+            goal_repository, roadmap_repository, proposal_ai_client
+        )
+
+        try:
+            classification = await propose_use_case.execute(
+                goal_id=goal_id, user_id=current_user.id, feedback=payload.feedback
+            )
+        except (GoalNotFoundError, GoalAccessDeniedError):
+            # Não deveria disparar (já checamos posse acima), mas cobre
+            # corrida rara (ex: objetivo apagado entre o check e aqui) sem
+            # deixar escapar como 500 cru.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+        except RoadmapNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+        if classification.scope == "chapter_operation" and classification.operation is not None:
+            return AdaptGoalResponse(
+                message=classification.operation.get("summary") or "Alteração proposta em um capítulo.",
+                requires_confirmation=True,
+            )
+
+        # scope == "broad" (feedback amplo, sem capítulo específico, ou
+        # mirava um capítulo protegido/concluído): comportamento de sempre,
+        # aplicado direto, sem passo de confirmação. Adaptar tudo é
+        # praticamente recriar o roadmap -- mesmo nível de
+        # GenerateRoadmapUseCase (pro -> médio -> fraco).
+        ai_client = GeminiClient(
+            api_key=settings.GEMINI_API_KEY,
+            model=settings.GEMINI_PRO_MODEL,
+            fallback_models=[settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL],
+            on_usage=usage.logger_for("adapt_roadmap"),
+        )
+        use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, ai_client)
+
+        try:
+            result = await use_case.execute(
+                goal_id=goal_id,
+                user_id=current_user.id,
+                feedback=payload.feedback,
+            )
+        except (GoalNotFoundError, GoalAccessDeniedError):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+        except RoadmapNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except AdaptationFailedError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except HTTPException:
+        # A ação não aconteceu de verdade -- devolve o crédito já cobrado.
+        await user_repository.refund_credits(current_user.id, settings.CREDITS_COST_ADAPT)
+        raise
+    finally:
+        await usage.flush(db)
+
+    return AdaptGoalResponse(
+        message=f"{result.chapters_changed} capítulo(s) e {result.missions_changed} missão(ões) atualizados!",
+        chapters_changed=result.chapters_changed,
+        missions_changed=result.missions_changed,
+    )
+
+
+@router.post("/{goal_id}/adapt/confirm")
+async def confirm_adaptation(
+    goal_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Aplica de fato a proposta que ficou pendente depois de um POST
+    /adapt que retornou requires_confirmation=True."""
+    goal_repository = SQLAlchemyGoalRepository(db)
+    roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    use_case = ConfirmAdaptationUseCase(goal_repository, roadmap_repository)
+
+    try:
+        await use_case.execute(goal_id=goal_id, user_id=current_user.id)
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+    except NoPendingAdaptationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except AdaptationOperationNoLongerValidError as exc:
+        # 409: o estado do recurso mudou entre propor e confirmar -- não é
+        # nem "não encontrado" nem "pedido inválido", é um conflito real.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    return {"message": "Alteração aplicada com sucesso."}
+
+
+@router.post("/{goal_id}/adapt/reject")
+async def reject_adaptation(
+    goal_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Descarta a proposta pendente -- o roadmap continua exatamente como
+    estava, nada é alterado."""
+    goal_repository = SQLAlchemyGoalRepository(db)
+    roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    use_case = RejectAdaptationUseCase(goal_repository, roadmap_repository)
+
+    try:
+        await use_case.execute(goal_id=goal_id, user_id=current_user.id)
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+    except NoPendingAdaptationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    return {"message": "Alteração descartada. Seu roadmap continua como estava."}
+
+
+@router.post("/{goal_id}/chapters", status_code=status.HTTP_201_CREATED)
+async def create_chapter(
+    goal_id: int,
+    payload: ChapterCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    goal_repository = SQLAlchemyGoalRepository(db)
+    roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    use_case = CreateChapterUseCase(goal_repository, roadmap_repository)
+
+    try:
+        await use_case.execute(
             goal_id=goal_id,
             user_id=current_user.id,
-            feedback=payload.feedback,
+            title=payload.title,
+            after_chapter_id=payload.after_chapter_id,
         )
     except (GoalNotFoundError, GoalAccessDeniedError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
     except RoadmapNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    except AdaptationFailedError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except ChapterNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except CannotInsertAfterCompletedChapterError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    return AdaptGoalResponse(
-        message=f"{new_chapters_count} novo(s) capítulo(s) adicionado(s) ao seu roadmap!",
-        new_chapters_count=new_chapters_count,
+    return {"message": "Capítulo criado. Adicione missões a ele para começar."}
+
+
+@router.patch("/{goal_id}/chapters/{chapter_id}/lock")
+async def set_chapter_lock(
+    goal_id: int,
+    chapter_id: int,
+    payload: ChapterLockRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Trava (locked=true) ou destrava (locked=false) um capítulo contra
+    mudanças da adaptação por IA -- tanto pra proteger um capítulo que a
+    pessoa já ajustou do jeito que queria, quanto porque a IA nunca deve
+    tentar mudar aquele conteúdo de novo."""
+    goal_repository = SQLAlchemyGoalRepository(db)
+    roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    use_case = SetChapterLockUseCase(goal_repository, roadmap_repository)
+
+    try:
+        await use_case.execute(
+            goal_id=goal_id, user_id=current_user.id, chapter_id=chapter_id, locked=payload.locked
+        )
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+    except RoadmapNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ChapterNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    verb = "travado" if payload.locked else "destravado"
+    return {"message": f"Capítulo {verb} para alterações da IA."}
+
+
+@router.post("/{goal_id}/knowledge", response_model=KnowledgeNodeOut, status_code=status.HTTP_201_CREATED)
+async def create_knowledge_node(
+    goal_id: int,
+    payload: CreateKnowledgeNodeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    goal_repository = SQLAlchemyGoalRepository(db)
+    knowledge_node_repository = SQLAlchemyKnowledgeNodeRepository(db)
+    embedding_ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_EMBEDDING_MODEL)
+    use_case = CreateKnowledgeNodeUseCase(goal_repository, knowledge_node_repository, embedding_ai_client)
+
+    try:
+        result = await use_case.execute(
+            goal_id=goal_id, user_id=current_user.id, topic_name=payload.topic_name
+        )
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+
+    return KnowledgeNodeOut(
+        node_id=result.node.id,
+        topic_name=result.node.topic_name,
+        next_review_date=result.node.next_review_date,
+        mastery_level=compute_mastery_level(result.node.interval_days),
+        was_duplicate=result.was_duplicate,
     )

@@ -1,11 +1,61 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.database.models import Mission, MissionExecution, Roadmap, RoadmapChapter
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    """A geração de capítulos/missões (create_full_roadmap, _insert_chapters,
+    split_chapter_with_new) não usa response_schema do Gemini -- então
+    'is_conceptual' vem só por instrução de prompt, sem validação de tipo
+    garantida pela API. Isso evita o typo clássico de tratar a STRING "false"
+    como truthy (bool("false") é True em Python) se a IA ocasionalmente
+    devolver texto em vez de um boolean de verdade."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return default
+
+
+def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    """Mesma razão do _coerce_bool acima: sem response_schema, nada garante
+    que 'estimated_minutes' venha como int de verdade -- a IA já devolveu
+    isso como string ocasionalmente (ex: "20 minutos" em vez de 20), o que
+    quebra o INSERT no meio da transação (erro de tipo no Postgres) e, sem
+    tratamento, deixa o Goal preso em "pending" para sempre (ver rollback
+    em generate_roadmap.py)."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if digits:
+            return int(digits)
+    return default
+
+
+def _mission_from_ai_data(chapter_id: int, order_index: int, data: Dict[str, Any]) -> Mission:
+    """Constrói um Mission a partir do dict que vem da IA, com a MESMA
+    coerção de tipo em todo lugar que cria missão gerada por IA -- extraído
+    porque esse bloco existia quase idêntico em 5 métodos diferentes
+    (create_full_roadmap, _insert_chapters, split_chapter_with_new,
+    replace_chapter_content, insert_full_chapter_after): corrigir um tipo
+    aqui precisava ser lembrado em 5 lugares, fácil de esquecer um."""
+    return Mission(
+        chapter_id=chapter_id,
+        title=data["title"],
+        description=data.get("description"),
+        estimated_minutes=_coerce_int(data.get("estimated_minutes")),
+        order_index=order_index,
+        is_conceptual=_coerce_bool(data.get("is_conceptual"), default=True),
+        created_by="ai",
+    )
 
 
 class SQLAlchemyRoadmapRepository:
@@ -34,19 +84,13 @@ class SQLAlchemyRoadmapRepository:
                 title=chapter_data["title"],
                 order_index=chapter_index,
                 status="in_progress" if chapter_index == 0 else "locked",
+                created_by="ai",
             )
             self.session.add(chapter)
             await self.session.flush()
 
             for mission_index, mission_data in enumerate(chapter_data.get("missions", [])):
-                mission = Mission(
-                    chapter_id=chapter.id,
-                    title=mission_data["title"],
-                    description=mission_data.get("description"),
-                    estimated_minutes=mission_data.get("estimated_minutes"),
-                    order_index=mission_index,
-                )
-                self.session.add(mission)
+                self.session.add(_mission_from_ai_data(chapter.id, mission_index, mission_data))
 
         await self.session.commit()
         await self.session.refresh(roadmap)
@@ -88,19 +132,13 @@ class SQLAlchemyRoadmapRepository:
                 title=chapter_data["title"],
                 order_index=starting_order_index + offset,
                 status=first_chapter_status if offset == 0 else "locked",
+                created_by="ai",
             )
             self.session.add(chapter)
             await self.session.flush()
 
             for mission_index, mission_data in enumerate(chapter_data.get("missions", [])):
-                mission = Mission(
-                    chapter_id=chapter.id,
-                    title=mission_data["title"],
-                    description=mission_data.get("description"),
-                    estimated_minutes=mission_data.get("estimated_minutes"),
-                    order_index=mission_index,
-                )
-                self.session.add(mission)
+                self.session.add(_mission_from_ai_data(chapter.id, mission_index, mission_data))
 
     async def _bump_version(self, roadmap_id: int, ai_generation_log: Dict[str, Any]) -> None:
         roadmap = await self.session.get(Roadmap, roadmap_id)
@@ -155,6 +193,42 @@ class SQLAlchemyRoadmapRepository:
         await self._bump_version(roadmap_id, ai_generation_log)
         await self.session.commit()
 
+    async def insert_chapter_after(
+        self,
+        roadmap_id: int,
+        title: str,
+        after_order_index: int,
+        status: str,
+    ) -> RoadmapChapter:
+        target_order_index = after_order_index + 1
+
+        # Abre espaço: todo capítulo que já estava na posição alvo (ou
+        # depois) anda +1. Em ordem DESCENDENTE por segurança -- não tem
+        # constraint de unicidade em (roadmap_id, order_index) hoje, mas
+        # assim evita colisão transitória se um dia passar a ter.
+        result = await self.session.execute(
+            select(RoadmapChapter)
+            .where(
+                RoadmapChapter.roadmap_id == roadmap_id,
+                RoadmapChapter.order_index >= target_order_index,
+            )
+            .order_by(RoadmapChapter.order_index.desc())
+        )
+        for chapter_to_shift in result.scalars().all():
+            chapter_to_shift.order_index += 1
+
+        new_chapter = RoadmapChapter(
+            roadmap_id=roadmap_id,
+            title=title,
+            order_index=target_order_index,
+            status=status,
+            created_by="user",
+        )
+        self.session.add(new_chapter)
+        await self.session.commit()
+        await self.session.refresh(new_chapter)
+        return new_chapter
+
     async def get_pending_mission_ids(self, chapter_id: int, user_id: int) -> List[int]:
         result = await self.session.execute(
             select(Mission.id)
@@ -168,21 +242,38 @@ class SQLAlchemyRoadmapRepository:
 
     async def get_chapter_reflections(
         self, chapter_id: int, user_id: int, since: Optional[datetime] = None
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         conditions = [
             Mission.chapter_id == chapter_id,
             MissionExecution.user_id == user_id,
-            MissionExecution.user_reflection.is_not(None),
+            or_(
+                MissionExecution.user_reflection.is_not(None),
+                MissionExecution.difficulty_rating.is_not(None),
+                MissionExecution.satisfaction_rating.is_not(None),
+            ),
         ]
         if since is not None:
             conditions.append(MissionExecution.completed_at > since)
 
         result = await self.session.execute(
-            select(Mission.title, MissionExecution.user_reflection)
+            select(
+                Mission.title,
+                MissionExecution.user_reflection,
+                MissionExecution.difficulty_rating,
+                MissionExecution.satisfaction_rating,
+            )
             .join(MissionExecution, MissionExecution.mission_id == Mission.id)
             .where(*conditions)
         )
-        return [{"mission_title": title, "reflection": reflection} for title, reflection in result.all()]
+        return [
+            {
+                "mission_title": title,
+                "reflection": reflection,
+                "difficulty_rating": difficulty_rating,
+                "satisfaction_rating": satisfaction_rating,
+            }
+            for title, reflection, difficulty_rating, satisfaction_rating in result.all()
+        ]
 
     async def split_chapter_with_new(
         self,
@@ -198,7 +289,6 @@ class SQLAlchemyRoadmapRepository:
 
         old_chapter = await self.session.get(RoadmapChapter, chapter_id)
         if old_chapter is not None:
-
             old_chapter.status = "completed"
             old_chapter.closed_early = True
 
@@ -207,19 +297,13 @@ class SQLAlchemyRoadmapRepository:
             title=new_chapter_title,
             order_index=new_chapter_order_index,
             status="in_progress",  
+            created_by="ai",
         )
         self.session.add(new_chapter)
         await self.session.flush()
 
         for offset, mission_data in enumerate(new_chapter_missions):
-            mission = Mission(
-                chapter_id=new_chapter.id,
-                title=mission_data["title"],
-                description=mission_data.get("description"),
-                estimated_minutes=mission_data.get("estimated_minutes"),
-                order_index=offset,
-            )
-            self.session.add(mission)
+            self.session.add(_mission_from_ai_data(new_chapter.id, offset, mission_data))
 
         await self.session.commit()
 
@@ -235,19 +319,36 @@ class SQLAlchemyRoadmapRepository:
 
     async def get_reflections_for_chapters(
         self, chapter_ids: List[int], user_id: int
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         if not chapter_ids:
             return []
         result = await self.session.execute(
-            select(Mission.title, MissionExecution.user_reflection)
+            select(
+                Mission.title,
+                MissionExecution.user_reflection,
+                MissionExecution.difficulty_rating,
+                MissionExecution.satisfaction_rating,
+            )
             .join(MissionExecution, MissionExecution.mission_id == Mission.id)
             .where(
                 Mission.chapter_id.in_(chapter_ids),
                 MissionExecution.user_id == user_id,
-                MissionExecution.user_reflection.is_not(None),
+                or_(
+                    MissionExecution.user_reflection.is_not(None),
+                    MissionExecution.difficulty_rating.is_not(None),
+                    MissionExecution.satisfaction_rating.is_not(None),
+                ),
             )
         )
-        return [{"mission_title": title, "reflection": reflection} for title, reflection in result.all()]
+        return [
+            {
+                "mission_title": title,
+                "reflection": reflection,
+                "difficulty_rating": difficulty_rating,
+                "satisfaction_rating": satisfaction_rating,
+            }
+            for title, reflection, difficulty_rating, satisfaction_rating in result.all()
+        ]
 
     async def get_chapters_by_roadmap(self, roadmap_id: int) -> List[RoadmapChapter]:
         result = await self.session.execute(
@@ -258,3 +359,168 @@ class SQLAlchemyRoadmapRepository:
     async def get_missions_by_chapter(self, chapter_id: int) -> List[Mission]:
         result = await self.session.execute(select(Mission).where(Mission.chapter_id == chapter_id))
         return list(result.scalars().all())
+
+    async def add_mission_to_chapter(
+        self,
+        chapter_id: int,
+        title: str,
+        description: Optional[str],
+        estimated_minutes: Optional[int],
+    ) -> Mission:
+        existing_result = await self.session.execute(
+            select(Mission.order_index).where(Mission.chapter_id == chapter_id)
+        )
+        existing_indexes = [row[0] for row in existing_result.all()]
+        next_order_index = (max(existing_indexes) + 1) if existing_indexes else 0
+
+        mission = Mission(
+            chapter_id=chapter_id,
+            title=title,
+            description=description,
+            estimated_minutes=estimated_minutes,
+            order_index=next_order_index,
+            # Missão manual: sem classificação da IA disponível, assume-se
+            # conceitual (comportamento mais conservador -- na dúvida, entra
+            # no Mapa do Conhecimento em vez de ser silenciosamente ignorada).
+            is_conceptual=True,
+            created_by="user",
+        )
+        self.session.add(mission)
+        await self.session.commit()
+        await self.session.refresh(mission)
+        return mission
+
+    async def update_mission(self, mission_id: int, **fields: Any) -> Mission:
+        mission = await self.session.get(Mission, mission_id)
+        if mission is None:
+            raise ValueError(f"Mission {mission_id} não encontrada para atualização.")
+
+        for field_name, value in fields.items():
+            setattr(mission, field_name, value)
+
+        await self.session.commit()
+        await self.session.refresh(mission)
+        return mission
+
+    async def delete_mission(self, mission_id: int) -> None:
+        mission = await self.session.get(Mission, mission_id)
+        if mission is None:
+            return
+        chapter_id = mission.chapter_id
+
+        await self.session.execute(delete(Mission).where(Mission.id == mission_id))
+
+        # Reordena o que sobrou pra fechar o buraco no order_index (ex:
+        # [0,1,2,3] apagando o de índice 1 virava [0,2,3] -- agora vira
+        # [0,1,2]). Reatribui só quem realmente mudou, pra não gerar UPDATE
+        # à toa em missões que já estavam no índice certo.
+        result = await self.session.execute(
+            select(Mission).where(Mission.chapter_id == chapter_id).order_by(Mission.order_index)
+        )
+        for new_index, remaining_mission in enumerate(result.scalars().all()):
+            if remaining_mission.order_index != new_index:
+                remaining_mission.order_index = new_index
+
+        await self.session.commit()
+
+    async def complete_chapter_and_unlock_next(self, chapter_id: int, next_chapter_id: Optional[int]) -> None:
+        chapter = await self.session.get(RoadmapChapter, chapter_id)
+        if chapter is not None:
+            chapter.status = "completed"
+
+        if next_chapter_id is not None:
+            next_chapter = await self.session.get(RoadmapChapter, next_chapter_id)
+            if next_chapter is not None and next_chapter.status == "locked":
+                next_chapter.status = "in_progress"
+
+        await self.session.commit()
+
+    async def set_pending_adaptation(self, roadmap_id: int, operation: Dict[str, Any]) -> None:
+        roadmap = await self.session.get(Roadmap, roadmap_id)
+        if roadmap is not None:
+            roadmap.pending_adaptation = operation
+            await self.session.commit()
+
+    async def clear_pending_adaptation(self, roadmap_id: int) -> None:
+        roadmap = await self.session.get(Roadmap, roadmap_id)
+        if roadmap is not None:
+            roadmap.pending_adaptation = None
+            await self.session.commit()
+
+    async def replace_chapter_content(
+        self, chapter_id: int, title: str, missions_data: List[Dict[str, Any]]
+    ) -> None:
+        chapter = await self.session.get(RoadmapChapter, chapter_id)
+        if chapter is None:
+            return
+
+        # Só apaga missão SEM execução -- se por algum motivo (corrida entre
+        # o usuário completar uma missão e confirmar a proposta) alguma já
+        # tiver sido concluída nesse meio tempo, ela sobrevive em vez de
+        # apagar progresso real do usuário. O restante é reordenado a
+        # seguir pra não deixar buraco no order_index (mesma lógica de
+        # delete_mission).
+        result = await self.session.execute(
+            select(Mission.id)
+            .outerjoin(MissionExecution, MissionExecution.mission_id == Mission.id)
+            .where(Mission.chapter_id == chapter_id, MissionExecution.id.is_(None))
+        )
+        mission_ids_to_delete = [row[0] for row in result.all()]
+        if mission_ids_to_delete:
+            await self.session.execute(delete(Mission).where(Mission.id.in_(mission_ids_to_delete)))
+
+        chapter.title = title
+
+        result = await self.session.execute(
+            select(func.max(Mission.order_index)).where(Mission.chapter_id == chapter_id)
+        )
+        next_order_index = (result.scalar() or -1) + 1
+
+        for offset, mission_data in enumerate(missions_data):
+            self.session.add(_mission_from_ai_data(chapter_id, next_order_index + offset, mission_data))
+
+        await self.session.commit()
+
+    async def insert_full_chapter_after(
+        self,
+        roadmap_id: int,
+        after_order_index: int,
+        title: str,
+        missions_data: List[Dict[str, Any]],
+        status: str = "locked",
+    ) -> RoadmapChapter:
+        target_order_index = after_order_index + 1
+
+        result = await self.session.execute(
+            select(RoadmapChapter)
+            .where(
+                RoadmapChapter.roadmap_id == roadmap_id,
+                RoadmapChapter.order_index >= target_order_index,
+            )
+            .order_by(RoadmapChapter.order_index.desc())
+        )
+        for chapter_to_shift in result.scalars().all():
+            chapter_to_shift.order_index += 1
+
+        new_chapter = RoadmapChapter(
+            roadmap_id=roadmap_id,
+            title=title,
+            order_index=target_order_index,
+            status=status,
+            created_by="ai",
+        )
+        self.session.add(new_chapter)
+        await self.session.flush()
+
+        for offset, mission_data in enumerate(missions_data):
+            self.session.add(_mission_from_ai_data(new_chapter.id, offset, mission_data))
+
+        await self.session.commit()
+        await self.session.refresh(new_chapter)
+        return new_chapter
+
+    async def set_chapter_lock(self, chapter_id: int, locked: bool) -> None:
+        chapter = await self.session.get(RoadmapChapter, chapter_id)
+        if chapter is not None:
+            chapter.is_locked_from_ai = locked
+            await self.session.commit()

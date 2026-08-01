@@ -55,12 +55,14 @@ class RoadmapRepository(Protocol):
 
     async def get_chapter_reflections(
         self, chapter_id: int, user_id: int, since: Optional[datetime] = None
-    ) -> List[Dict[str, str]]:
-        """Reflexões (Diário da Evolução) que o usuário deixou nas missões
-        já concluídas desse capítulo, para alimentar a adaptação. Se
-        'since' for informado, considera só reflexões de missões concluídas
-        DEPOIS desse momento -- evita reenviar à IA algo que uma adaptação
-        anterior já processou."""
+    ) -> List[Dict[str, Any]]:
+        """Reflexões (Diário da Evolução), nível de dificuldade sentido e
+        satisfação com o roadmap que o usuário deixou nas missões já
+        concluídas desse capítulo, para alimentar a adaptação -- cada item
+        tem mission_title/reflection/difficulty_rating/satisfaction_rating
+        (os 3 últimos são opcionais). Se 'since' for informado, considera só
+        execuções DEPOIS desse momento -- evita reenviar à IA algo que uma
+        adaptação anterior já processou."""
         ...
 
     async def count_completed_chapters(self, roadmap_id: int) -> int:
@@ -70,9 +72,10 @@ class RoadmapRepository(Protocol):
 
     async def get_reflections_for_chapters(
         self, chapter_ids: List[int], user_id: int
-    ) -> List[Dict[str, str]]:
-        """Reflexões de várias missões de vários capítulos de uma vez
-        (usado pela triagem automática, que olha os últimos N capítulos)."""
+    ) -> List[Dict[str, Any]]:
+        """Mesma ideia de get_chapter_reflections, mas de vários capítulos
+        de uma vez (usado pela triagem automática, que olha os últimos N
+        capítulos)."""
         ...
 
     async def get_chapters_by_roadmap(self, roadmap_id: int) -> List[Any]:
@@ -98,4 +101,88 @@ class RoadmapRepository(Protocol):
         as missões pendentes dele) e cria um capítulo NOVO logo em seguida
         com o conteúdo ajustado -- usado quando a adaptação muda de rumo o
         suficiente para não fazer mais sentido continuar no mesmo capítulo."""
+        ...
+
+    async def add_mission_to_chapter(
+        self,
+        chapter_id: int,
+        title: str,
+        description: Optional[str],
+        estimated_minutes: Optional[int],
+    ) -> Any:
+        """Adiciona uma missão criada manualmente ao final de um capítulo
+        existente (order_index calculado automaticamente). created_by fica
+        "user" -- este método só é usado pelo fluxo de criação manual."""
+        ...
+
+    async def update_mission(self, mission_id: int, **fields: Any) -> Any:
+        """Atualiza campos de uma missão existente (edição manual)."""
+        ...
+
+    async def delete_mission(self, mission_id: int) -> None:
+        """Apaga uma missão E reordena o order_index das missões
+        remanescentes do mesmo capítulo, para não deixar buraco na sequência
+        (ex: apagar a missão de índice 1 em [0,1,2,3] deixa [0,2,3] sem essa
+        reordenação -- este método fecha isso para [0,1,2]). O CHAMADOR é
+        responsável por já ter checado que ela não tem execução -- este
+        método não valida isso de novo."""
+        ...
+
+    async def insert_chapter_after(
+        self,
+        roadmap_id: int,
+        title: str,
+        after_order_index: int,
+        status: str,
+    ) -> Any:
+        """Insere um único capítulo manual (created_by="user", sem missões)
+        logo após a posição informada, empurrando +1 no order_index de todo
+        capítulo que já estava depois dela. Diferente de append_chapters,
+        que assume que não há nada para empurrar porque sempre insere no
+        final do roadmap -- este método permite inserir em qualquer posição,
+        inclusive no meio."""
+        ...
+
+    async def complete_chapter_and_unlock_next(self, chapter_id: int, next_chapter_id: Optional[int]) -> None:
+        """Marca um capítulo como completed e desbloqueia o próximo, se
+        houver -- usado quando apagar a última missão pendente de um
+        capítulo faz ele terminar "sozinho"."""
+        ...
+
+    async def set_pending_adaptation(self, roadmap_id: int, operation: Dict[str, Any]) -> None:
+        """Guarda uma operação (replace_chapter/insert_chapter) como
+        proposta pendente -- NÃO aplica nada nos capítulos/missões reais
+        ainda. Ver ProposeChapterOperationUseCase."""
+        ...
+
+    async def clear_pending_adaptation(self, roadmap_id: int) -> None:
+        """Descarta a proposta pendente, aplicada ou não -- usado tanto
+        depois de confirmar quanto depois de rejeitar."""
+        ...
+
+    async def replace_chapter_content(self, chapter_id: int, title: str, missions_data: List[Dict[str, Any]]) -> None:
+        """Aplica um operation type="replace_chapter" confirmado: troca o
+        título do capítulo e SUBSTITUI todas as suas missões (apaga as
+        antigas, insere as novas com created_by="ai"). Só deve ser chamado
+        depois que ConfirmAdaptationUseCase já validou que o capítulo não
+        está completed nem locked -- este método não revalida isso."""
+        ...
+
+    async def insert_full_chapter_after(
+        self,
+        roadmap_id: int,
+        after_order_index: int,
+        title: str,
+        missions_data: List[Dict[str, Any]],
+        status: str = "locked",
+    ) -> Any:
+        """Como insert_chapter_after, mas já vem COM missões (usado ao
+        aplicar um operation type="insert_chapter" confirmado) --
+        created_by="ai" tanto no capítulo quanto nas missões, diferente de
+        insert_chapter_after (criação manual, created_by="user")."""
+        ...
+
+    async def set_chapter_lock(self, chapter_id: int, locked: bool) -> None:
+        """Liga/desliga is_locked_from_ai -- um capítulo travado nunca é
+        alvo de replace_chapter/insert_chapter pela adaptação."""
         ...

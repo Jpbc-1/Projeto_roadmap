@@ -2,6 +2,7 @@ import logging
 from datetime import date, timedelta
 from typing import List, Optional
 
+from app.application.knowledge.embedding_utils import find_duplicate_node
 from app.core.ai.gemini_client import GeminiClient
 from app.domain.repositories.goal_repository import GoalRepository
 from app.domain.repositories.knowledge_node_repository import KnowledgeNodeRepository
@@ -47,20 +48,6 @@ EXTRACTION_SCHEMA = {
 }
 
 
-SIMILARITY_THRESHOLD = 0.85
-
-
-def cosine_similarity(a: List[float], b: List[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
 class ExtractKnowledgeNodesUseCase:
     def __init__(
         self,
@@ -86,8 +73,13 @@ class ExtractKnowledgeNodesUseCase:
             if goal is None or not goal.involves_learning:
                 return None
 
-            missions = await self.roadmap_repository.get_missions_by_chapter(chapter_id)
+            all_missions = await self.roadmap_repository.get_missions_by_chapter(chapter_id)
+            missions = [m for m in all_missions if m.is_conceptual]
             if not missions:
+                logger.info(
+                    "Knowledge map: capítulo %s sem missões conceituais (só prática/setup), pulando IA.",
+                    chapter_id,
+                )
                 return None
 
             concepts = await self._extract_concepts(goal, missions)
@@ -101,7 +93,7 @@ class ExtractKnowledgeNodesUseCase:
             for concept_name in concepts:
                 embedding = await self.embedding_ai_client.embed_text(concept_name)
 
-                duplicate = self._find_duplicate(embedding, existing_nodes)
+                duplicate = find_duplicate_node(embedding, existing_nodes)
                 if duplicate is not None:
                     logger.info(
                         "Knowledge map: '%s' já existe como '%s', não duplicando.",
@@ -117,7 +109,7 @@ class ExtractKnowledgeNodesUseCase:
                     embedding=embedding,
                     next_review_date=date.today() + timedelta(days=1),
                 )
-                existing_nodes.append(node) 
+                existing_nodes.append(node)  
                 created_count += 1
 
             logger.info(
@@ -128,7 +120,7 @@ class ExtractKnowledgeNodesUseCase:
             )
             return created_count
 
-        except Exception:  
+        except Exception: 
             logger.exception("Knowledge map: falha ao extrair conceitos do capítulo %s", chapter_id)
             return None
 
@@ -147,14 +139,3 @@ class ExtractKnowledgeNodesUseCase:
         if not isinstance(concepts, list):
             return []
         return [str(c).strip() for c in concepts if str(c).strip()][:4]
-
-    @staticmethod
-    def _find_duplicate(embedding: List[float], existing_nodes):
-        best_match = None
-        best_score = 0.0
-        for node in existing_nodes:
-            score = cosine_similarity(embedding, node.embedding)
-            if score > best_score:
-                best_score = score
-                best_match = node
-        return best_match if best_score >= SIMILARITY_THRESHOLD else None

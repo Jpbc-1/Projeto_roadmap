@@ -1,7 +1,7 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from app.application.roadmaps.adapt_roadmap import AdaptRoadmapUseCase
+from app.application.roadmaps.adapt_roadmap import AdaptationResult, AdaptRoadmapUseCase
 from app.core.ai.gemini_client import GeminiClient
 from app.domain.repositories.roadmap_repository import RoadmapRepository
 
@@ -9,15 +9,19 @@ logger = logging.getLogger(__name__)
 
 TRIAGE_SYSTEM_INSTRUCTION = """
 Você é um triador rápido de ritmo de aprendizado. Sua ÚNICA tarefa é ler
-reflexões recentes que um usuário deixou sobre capítulos que acabou de
-concluir, e decidir se vale a pena adaptar o roadmap dele agora.
+sinais recentes que um usuário deixou sobre capítulos que acabou de
+concluir -- reflexões em texto livre, o nível de dificuldade que ele marcou
+em cada missão (too_easy/just_right/too_hard) e sua satisfação com o
+roadmap (1 a 5) -- e decidir se vale a pena adaptar o roadmap dele agora.
 
-Marque needs_adaptation como true SOMENTE se houver um sinal claro nas
-reflexões: satisfação/facilidade excessiva repetida (sugerindo acelerar),
-ou dificuldade/cansaço/frustração (sugerindo desacelerar).
+Marque needs_adaptation como true SOMENTE se houver um sinal claro:
+satisfação/facilidade excessiva repetida (sugerindo acelerar), ou
+dificuldade/cansaço/frustração repetida, ou várias missões marcadas
+too_hard, ou satisfação baixa (1-2) repetida (sugerindo desacelerar ou
+mudar de abordagem).
 
-Marque needs_adaptation como false se as reflexões forem neutras, vagas,
-ausentes, mistas sem padrão claro, ou indicarem que o ritmo atual está bom.
+Marque needs_adaptation como false se os sinais forem neutros, vagos,
+ausentes, mistos sem padrão claro, ou indicarem que o ritmo atual está bom.
 Não adapte por qualquer motivo pequeno -- só quando o sinal for real.
 
 Responda SOMENTE em JSON, neste formato:
@@ -48,7 +52,7 @@ class AutoAdaptRoadmapUseCase:
         self.adapt_use_case = adapt_use_case
         self.chapters_window = chapters_window
 
-    async def execute(self, goal_id: int, user_id: int, roadmap_id: int) -> Optional[int]:
+    async def execute(self, goal_id: int, user_id: int, roadmap_id: int) -> Optional[AdaptationResult]:
         """Retorna None se decidiu não adaptar (nada mudou, ou algo falhou),
         ou a quantidade de itens alterados se a adaptação completa foi
         acionada. NUNCA deixa uma exceção escapar -- isso roda em
@@ -80,7 +84,12 @@ class AutoAdaptRoadmapUseCase:
 
             feedback = f"[Adaptação automática] {decision.get('reason', 'sinal detectado nas reflexões')}"
             result = await self.adapt_use_case.execute(goal_id=goal_id, user_id=user_id, feedback=feedback)
-            logger.info("Auto-adapt: roadmap %s adaptado automaticamente (%s itens alterados).", roadmap_id, result)
+            logger.info(
+                "Auto-adapt: roadmap %s adaptado automaticamente (%s capítulo(s), %s missão(ões)).",
+                roadmap_id,
+                result.chapters_changed,
+                result.missions_changed,
+            )
             return result
 
         except Exception: 
@@ -95,10 +104,20 @@ class AutoAdaptRoadmapUseCase:
         )
         return [c.id for c in completed[-self.chapters_window :]]
 
-    async def _triage(self, reflections: List[Dict[str, str]]) -> dict:
-        prompt = "Reflexões recentes do usuário:\n"
+    async def _triage(self, reflections: List[Dict[str, Any]]) -> dict:
+        prompt = "Sinais recentes do usuário:\n"
         for item in reflections:
-            prompt += f"- \"{item['mission_title']}\": {item['reflection']}\n"
+            line = f"- \"{item['mission_title']}\""
+            details = []
+            if item.get("reflection"):
+                details.append(f"reflexão: {item['reflection']}")
+            if item.get("difficulty_rating"):
+                details.append(f"dificuldade: {item['difficulty_rating']}")
+            if item.get("satisfaction_rating") is not None:
+                details.append(f"satisfação: {item['satisfaction_rating']}/5")
+            if details:
+                line += " (" + "; ".join(details) + ")"
+            prompt += line + "\n"
 
         return await self.triage_ai_client.generate_json(
             prompt=prompt,

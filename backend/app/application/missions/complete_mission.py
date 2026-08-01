@@ -3,7 +3,7 @@ from datetime import date
 from typing import Optional
 
 from app.application.gamification.streak import calculate_streak_update
-from app.domain.repositories.mission_repository import MissionRepository
+from app.domain.repositories.mission_repository import MissionExecutionConflictError, MissionRepository
 from app.infrastructure.database.models import MissionExecution
 
 
@@ -36,6 +36,8 @@ class CompleteMissionUseCase:
         mission_id: int,
         user_id: int,
         user_reflection: Optional[str],
+        difficulty_rating: Optional[str] = None,
+        satisfaction_rating: Optional[int] = None,
     ) -> MissionCompletionResult:
         mission = await self.mission_repository.get_by_id_with_hierarchy(mission_id)
         if mission is None:
@@ -58,19 +60,29 @@ class CompleteMissionUseCase:
         stats = await self.mission_repository.get_user_stats(user_id)
         streak_update = calculate_streak_update(stats, xp_to_add=xp_rewarded, today=date.today())
 
-        execution = await self.mission_repository.persist_completion(
-            mission_id=mission_id,
-            user_id=user_id,
-            xp_rewarded=xp_rewarded,
-            user_reflection=user_reflection,
-            chapter_id_to_complete=chapter_id_to_complete,
-            next_chapter_id_to_unlock=next_chapter_id_to_unlock,
-            new_total_xp=streak_update.new_total_xp,
-            new_level=streak_update.new_level,
-            new_current_streak=streak_update.new_current_streak,
-            new_max_streak=streak_update.new_max_streak,
-            activity_date=streak_update.activity_date,
-        )
+        try:
+            execution = await self.mission_repository.persist_completion(
+                mission_id=mission_id,
+                user_id=user_id,
+                xp_rewarded=xp_rewarded,
+                user_reflection=user_reflection,
+                chapter_id_to_complete=chapter_id_to_complete,
+                next_chapter_id_to_unlock=next_chapter_id_to_unlock,
+                new_total_xp=streak_update.new_total_xp,
+                new_level=streak_update.new_level,
+                new_current_streak=streak_update.new_current_streak,
+                new_max_streak=streak_update.new_max_streak,
+                activity_date=streak_update.activity_date,
+                difficulty_rating=difficulty_rating,
+                satisfaction_rating=satisfaction_rating,
+            )
+        except MissionExecutionConflictError:
+            # O check no início do método (has_execution) não é atômico --
+            # uma requisição concorrente pode ter gravado a execução entre
+            # aquele check e este persist_completion. A constraint única do
+            # banco pegou a corrida; do ponto de vista de quem chamou, o
+            # resultado é o mesmo de "já tinha sido concluída".
+            raise MissionAlreadyCompletedError("Esta missão já foi concluída.")
 
         return MissionCompletionResult(
             execution=execution,

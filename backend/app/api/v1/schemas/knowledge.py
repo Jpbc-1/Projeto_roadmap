@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DueReviewOut(BaseModel):
@@ -10,7 +10,7 @@ class DueReviewOut(BaseModel):
     goal_title: Optional[str]
     topic_name: str
     next_review_date: date
-    mastery_level: str  
+    mastery_level: str 
 
 
 class AnswerReviewRequest(BaseModel):
@@ -27,3 +27,15 @@ class ReviewResultOut(BaseModel):
     remaining_reviews_today: int
     daily_bonus_awarded: bool
     xp_earned: int
+
+
+class CreateKnowledgeNodeRequest(BaseModel):
+    topic_name: str = Field(..., min_length=2, max_length=255)
+
+
+class KnowledgeNodeOut(BaseModel):
+    node_id: int
+    topic_name: str
+    next_review_date: date
+    mastery_level: str
+    was_duplicate: bool  

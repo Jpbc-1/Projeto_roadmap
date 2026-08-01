@@ -20,3 +20,12 @@ class GoalRepository(Protocol):
     async def get_by_id(self, goal_id: int) -> Optional[Goal]: ...
 
     async def update(self, goal_id: int, **fields: Any) -> Goal: ...
+
+    async def rollback(self) -> None:
+        """Desfaz qualquer mudança não commitada na sessão atual. Usado nos
+        `except` de use cases em background (ex: GenerateRoadmapUseCase,
+        IntakeGoalUseCase) antes de tentar gravar generation_status="failed"
+        -- se a exceção capturada veio de uma falha de banco no meio de uma
+        transação, a sessão fica "suja" e qualquer novo comando (incluindo
+        esse próprio update de status) falharia sem esse rollback antes."""
+        ...

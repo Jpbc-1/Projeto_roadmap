@@ -14,7 +14,7 @@ entre `domain/entities` (puras) e este módulo — mas isso seria complexidade
 prematura para o estágio atual do projeto.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
 from sqlalchemy import (
@@ -27,6 +27,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
 )
@@ -42,6 +43,24 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     username: Mapped[Optional[str]] = mapped_column(String(30), unique=True, index=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+
+    # "free" | "pro" | "plus" -- por enquanto só o "free" tem comportamento
+    # de verdade (todo mundo cai nele no cadastro); pro/plus existem como
+    # campo pronto pra quando cobrança entrar depois do beta. Pra dar mais
+    # crédito pra uma conta específica agora, é edição direta no banco.
+    plan: Mapped[str] = mapped_column(String(20), default="free")
+    # Créditos consumidos pelas ações que chamam IA (ver app/core/config.py
+    # CREDITS_COST_* e app/core/ai/credits.py) -- descontados de forma
+    # atômica (UPDATE condicional, não read-modify-write) pra não permitir
+    # gastar mais do que se tem sob requisições concorrentes.
+    credits_remaining: Mapped[int] = mapped_column(Integer, default=500)
+
+    # Usado pra calcular "hoje" no fuso do usuário, não do servidor (streak
+    # e repetição espaçada) -- nome de fuso IANA (ex: "America/Sao_Paulo").
+    # Captado do device na criação da conta; sem isso, streak podia quebrar
+    # "sem motivo" pra quem mora num fuso diferente do servidor (UTC).
+    timezone: Mapped[str] = mapped_column(String(50), default="America/Sao_Paulo")
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     goals: Mapped[list["Goal"]] = relationship(back_populates="user")
@@ -73,10 +92,22 @@ class Goal(Base):
     generation_status: Mapped[str] = mapped_column(String(20), default="pending")
     generation_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Preenchidos pela triagem inicial (IntakeGoalUseCase), que roda depois
+    # da moderação e antes da geração de verdade. improved_prompt é o
+    # context_prompt original com clareza/gramática melhoradas pela IA (o
+    # original NUNCA é sobrescrito, fica em context_prompt); pending_questions
+    # é uma lista de até 3 perguntas curtas quando falta informação prática
+    # importante (ex: peso/altura pra objetivo de estética) -- nesse caso
+    # generation_status vira "awaiting_info" até o usuário responder via
+    # POST /goals/{id}/answers.
+    improved_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pending_questions: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="goals")
     roadmaps: Mapped[list["Roadmap"]] = relationship(back_populates="goal")
+    recommendations: Mapped[list["GoalRecommendation"]] = relationship(back_populates="goal")
 
 
 class Roadmap(Base):
@@ -88,6 +119,15 @@ class Roadmap(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_generation_log: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     last_adapted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Proposta de operação (replace_chapter/insert_chapter) gerada quando o
+    # feedback de adaptação mira um capítulo específico -- fica "em espera"
+    # aqui até o usuário confirmar (POST /adapt/confirm) ou rejeitar
+    # (POST /adapt/reject) via ConfirmAdaptationUseCase/RejectAdaptationUseCase.
+    # None = não há proposta pendente agora. Formato: {"type": ...,
+    # "target_chapter_id": ..., "summary": ..., "new_chapter": {...}}.
+    pending_adaptation: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     goal: Mapped["Goal"] = relationship(back_populates="roadmaps")
@@ -106,6 +146,17 @@ class RoadmapChapter(Base):
     status: Mapped[str] = mapped_column(String(20), default="locked")  
     closed_early: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # "ai" (gerado pelo roadmap/adaptação) ou "user" (capítulo manual) --
+    # permite estudar depois quanto do roadmap é gerado vs. customizado.
+    created_by: Mapped[str] = mapped_column(String(10), default="ai")
+
+    # Se True, a adaptação (manual ou automática) nunca deve gerar uma
+    # operação mirando este capítulo -- nem replace_chapter nem
+    # insert_chapter logo depois dele. Setado pelo usuário (endpoint de
+    # lock) quando ele quer proteger um capítulo que já ajustou do jeito
+    # que queria. Ver ProposeChapterOperationUseCase.
+    is_locked_from_ai: Mapped[bool] = mapped_column(Boolean, default=False)
+
     roadmap: Mapped["Roadmap"] = relationship(back_populates="chapters")
     missions: Mapped[list["Mission"]] = relationship(back_populates="chapter", order_by="Mission.order_index")
 
@@ -120,11 +171,27 @@ class Mission(Base):
     estimated_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     order_index: Mapped[int] = mapped_column(Integer)
 
+    # Mesma ideia do RoadmapChapter.created_by, no nível da missão.
+    created_by: Mapped[str] = mapped_column(String(10), default="ai")
+
+    # Decide se essa missão entra no Mapa do Conhecimento (revisão espaçada)
+    # quando o capítulo dela é concluído: True = conhecimento conceitual
+    # (vale revisar depois), False = ação prática/configuração (ex: "instale
+    # o Python") que não precisa virar cartão de revisão. Default True para
+    # não mudar o comportamento de missões já existentes antes desta coluna
+    # existir. Ver app/application/knowledge/extract_knowledge_nodes.py.
+    is_conceptual: Mapped[bool] = mapped_column(Boolean, default=True)
+
     chapter: Mapped["RoadmapChapter"] = relationship(back_populates="missions")
     executions: Mapped[list["MissionExecution"]] = relationship(back_populates="mission")
 
 class MissionExecution(Base):
     __tablename__ = "mission_executions"
+    # Defesa real contra corrida de duplo-toque/retry (ver
+    # CompleteMissionUseCase): dois INSERTs concorrentes pra mesma missão +
+    # usuário batem nesta constraint, não só no check em Python (que sozinho
+    # não é atômico contra concorrência).
+    __table_args__ = (UniqueConstraint("mission_id", "user_id", name="uq_mission_execution_user"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), index=True)
@@ -135,6 +202,16 @@ class MissionExecution(Base):
     xp_rewarded: Mapped[int] = mapped_column(Integer, default=0)
     user_reflection: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ai_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Sinais estruturados opcionais (o front decide quando pedir -- ex: nem
+    # toda missão precisa perguntar isso, pra não cansar o usuário). Ambos
+    # alimentam o contexto da adaptação (manual e automática), ver
+    # AdaptRoadmapUseCase._build_common_context.
+    # "too_easy" | "just_right" | "too_hard"
+    difficulty_rating: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Satisfação com o ROADMAP como um todo (não só esta missão), 1-5 --
+    # pensada pra ser perguntada de vez em quando, não a cada conclusão.
+    satisfaction_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     mission: Mapped["Mission"] = relationship(back_populates="executions")
 
@@ -207,3 +284,151 @@ class KnowledgeReview(Base):
     new_interval: Mapped[int] = mapped_column(Integer)
     old_factor: Mapped[float] = mapped_column(Float)
     new_factor: Mapped[float] = mapped_column(Float)
+
+
+class GoalRecommendation(Base):
+    """Recurso (app, curso, livro, comunidade, ferramenta) que a IA sugere
+    como complemento pra ajudar a alcançar o objetivo -- gerado junto com o
+    roadmap inicial. De propósito SEM campo de URL: a IA não tem como saber
+    se um link específico existe/está certo, e link quebrado/errado é pior
+    que não ter link nenhum. name + description já dão o suficiente pra
+    pessoa procurar por conta própria."""
+
+    __tablename__ = "goal_recommendations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id"), index=True)
+    name: Mapped[str] = mapped_column(String(150))
+    description: Mapped[str] = mapped_column(Text)
+    is_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    goal: Mapped["Goal"] = relationship(back_populates="recommendations")
+
+
+class BackgroundJob(Base):
+    """Fila de tarefas em background (geração de roadmap, adaptação
+    automática, extração do Mapa do Conhecimento) persistida no Postgres --
+    substitui o uso de FastAPI BackgroundTasks puro, que perde a tarefa se o
+    processo cair no meio do trabalho e não tem retry nem visibilidade
+    nenhuma. Processada por um worker simples via polling, sem precisar de
+    infra nova (Redis/Celery) -- ver app/core/jobs/worker.py."""
+
+    __tablename__ = "background_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(50), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    # "pending" -> "processing" -> "completed" ou "failed" (esgotou as tentativas)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    # Quando o job pode rodar -- usado tanto pra "agora" (default) quanto
+    # pro backoff exponencial entre tentativas.
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Timestamp de quando um worker pegou o job pra processar -- se ficar
+    # "processing" por tempo demais (worker crashou no meio), o próximo
+    # poll libera ele de volta pra "pending".
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Dono do job, pra dar pra checar status via API sem vazar job de outro
+    # usuário (ver GET /api/v1/jobs/{id}). Nullable pra permitir jobs de
+    # sistema no futuro, sem dono específico.
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AIUsageLog(Base):
+    """Uma linha por chamada de IA bem-sucedida -- não é usado pra cobrar
+    (isso é feito por créditos fixos por ação, ver User.credits_remaining e
+    CREDITS_COST_* em config.py), é só telemetria: quanto token cada tipo
+    de ação realmente consome, pra calibrar o custo em créditos com dado
+    real antes de lançar de verdade (em vez de só chutar um número)."""
+
+    __tablename__ = "ai_usage_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Nullable: nem toda chamada de IA tem um usuário direto associado no
+    # momento da chamada (hoje todas têm, mas não custa deixar preparado).
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # Nome da ação de negócio (job_type ou equivalente), NÃO o modelo --
+    # ex: "generate_roadmap", "adapt", "moderation". Usado pra agrupar
+    # "quanto uma criação de roadmap custa em média" independente de qual
+    # modelo (pro/médio/fraco) acabou respondendo naquela tentativa.
+    action: Mapped[str] = mapped_column(String(50), index=True)
+    model: Mapped[str] = mapped_column(String(50))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Reminder(Base):
+    """Lembrete RECORRENTE e solto (ex: "Lembrete da manhã", 08:00, todo
+    dia) -- não está preso a um compromisso específico, isso é
+    CalendarEvent, logo abaixo. Ver docs/adr/0002 pra por que são dois
+    mecanismos separados em vez de um sistema polimórfico único de
+    "notifications", e docs/adr/0003 pra essas 3 colunas de preferência.
+
+    IMPORTANTE: time_of_day/days_of_week são "hora de parede" (ex: 8h),
+    não um instante absoluto -- o agendador (application/notifications/
+    schedule_due_reminders.py) tem que converter usando User.timezone pra
+    saber se "agora" bate com isso pra CADA usuário, não usar UTC direto.
+
+    Preferência de notificação (3 escolhas independentes):
+    - is_active: já cobre "quer notificação ou não" -- um Reminder inteiro
+      É uma notificação, então desligar é o mesmo que "não quero essa".
+    - notification_timing_mode: 'app_default' (time_of_day/days_of_week
+      preenchidos com um horário sensato, ver core/notification_defaults.py)
+      ou 'custom' (a pessoa escolheu o horário e os dias ela mesma).
+    - notification_style: 'app_generated' (o texto é montado na hora do
+      disparo, olhando o que está pendente -- ver
+      domain/services/notification_content.py) ou 'custom_message' (a
+      pessoa escreveu o texto, guardado em custom_message).
+    """
+
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    label: Mapped[str] = mapped_column(String(120))
+    time_of_day: Mapped[time] = mapped_column(Time)
+    days_of_week: Mapped[list] = mapped_column(JSON)  # ex: [0,1,2,3,4,5,6], 0=domingo
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notification_timing_mode: Mapped[str] = mapped_column(String(20), default="app_default")
+    notification_style: Mapped[str] = mapped_column(String(20), default="app_generated")
+    custom_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CalendarEvent(Base):
+    """Compromisso/evento cadastrado manualmente pelo usuário (ex:
+    "Dentista às 15h") -- diferente de Mission, isso não vem da IA, é a
+    vida real da pessoa. start_datetime/end_datetime SÃO instantes
+    absolutos (tz-aware), diferente do Reminder -- comparar com "agora"
+    não precisa de conversão de fuso, o valor já é UTC de verdade.
+
+    Preferência de notificação (mesmas 3 escolhas do Reminder, ver
+    docs/adr/0003), mas notify_enabled é campo próprio aqui -- diferente
+    do Reminder, um CalendarEvent existe mesmo sem lembrete nenhum (é
+    normal só querer registrar o compromisso sem ser avisado).
+    """
+
+    __tablename__ = "calendar_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    start_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_datetime: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_all_day: Mapped[bool] = mapped_column(Boolean, default=False)
+    notify_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    remind_before_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    notification_timing_mode: Mapped[str] = mapped_column(String(20), default="app_default")
+    notification_style: Mapped[str] = mapped_column(String(20), default="app_generated")
+    custom_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

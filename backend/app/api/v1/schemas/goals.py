@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,9 @@ class GoalOut(BaseModel):
     daily_time_minutes: Optional[int]
     prior_knowledge_level: Optional[str]
     estimated_completion_weeks: Optional[int]
+    # Preenchido só quando generation_status == "awaiting_info" -- o front
+    # mostra essas perguntas e envia as respostas via POST /answers.
+    pending_questions: Optional[List[str]]
     created_at: datetime
 
     class Config:
@@ -36,3 +39,19 @@ class GoalOut(BaseModel):
 class GoalCreatedResponse(BaseModel):
     goal: GoalOut
     message: str
+
+
+class GoalAnswersRequest(BaseModel):
+    # Mesma ordem/quantidade de goal.pending_questions -- resposta vazia
+    # ("") numa posição é tratada como "não respondida", sem quebrar nada.
+    answers: List[str]
+
+
+class RecommendationOut(BaseModel):
+    id: int
+    name: str
+    description: str
+    is_paid: bool
+
+    class Config:
+        from_attributes = True

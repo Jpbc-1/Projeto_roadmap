@@ -57,3 +57,6 @@ class SQLAlchemyGoalRepository:
         await self.session.commit()
         await self.session.refresh(goal)
         return goal
+
+    async def rollback(self) -> None:
+        await self.session.rollback()

@@ -2,9 +2,11 @@ from datetime import date
 from typing import List, Optional, Set
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.domain.repositories.mission_repository import MissionExecutionConflictError
 from app.infrastructure.database.models import (
     Mission,
     MissionExecution,
@@ -80,12 +82,16 @@ class SQLAlchemyMissionRepository:
         new_current_streak: int,
         new_max_streak: int,
         activity_date: date,
+        difficulty_rating: Optional[str] = None,
+        satisfaction_rating: Optional[int] = None,
     ) -> MissionExecution:
         execution = MissionExecution(
             mission_id=mission_id,
             user_id=user_id,
             xp_rewarded=xp_rewarded,
             user_reflection=user_reflection,
+            difficulty_rating=difficulty_rating,
+            satisfaction_rating=satisfaction_rating,
         )
         self.session.add(execution)
 
@@ -118,6 +124,18 @@ class SQLAlchemyMissionRepository:
             stats.last_activity_date = activity_date
 
         # Um único commit no final -> ou tudo isso é gravado junto, ou nada é.
-        await self.session.commit()
+        # Se duas requisições concorrentes (duplo toque, retry de rede)
+        # passaram pelo has_execution() ao mesmo tempo e ambas chegaram
+        # aqui, a constraint única do banco (uq_mission_execution_user)
+        # rejeita a segunda -- é a defesa REAL contra a corrida, o check em
+        # Python lá no use case é só uma otimização pra evitar trabalho à
+        # toa no caminho feliz.
+        try:
+            await self.session.commit()
+        except IntegrityError:
+            await self.session.rollback()
+            raise MissionExecutionConflictError(
+                f"Já existe uma execução para a missão {mission_id} do usuário {user_id}."
+            )
         await self.session.refresh(execution)
         return execution

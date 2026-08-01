@@ -4,6 +4,14 @@ from typing import List, Optional, Protocol, Set
 from app.infrastructure.database.models import Mission, MissionExecution, UserStats
 
 
+class MissionExecutionConflictError(Exception):
+    """Levantado por persist_completion quando já existe uma execução para
+    essa missão+usuário -- detectado pela constraint única do banco
+    (uq_mission_execution_user), não só pelo check em Python (has_execution),
+    que sozinho não é atômico contra duas requisições concorrentes (duplo
+    toque, retry de rede) passando pelo check ao mesmo tempo."""
+
+
 class MissionRepository(Protocol):
     async def get_by_id_with_hierarchy(self, mission_id: int) -> Optional[Mission]:
         """Busca a missão já carregando chapter -> roadmap -> goal, para
@@ -33,8 +41,17 @@ class MissionRepository(Protocol):
         new_current_streak: int,
         new_max_streak: int,
         activity_date: date,
+        difficulty_rating: Optional[str] = None,
+        satisfaction_rating: Optional[int] = None,
     ) -> MissionExecution:
         """Grava TUDO (execução + status de capítulos + estatísticas de
         gamificação) numa única transação atômica. Os valores já vêm
-        decididos por quem chama -- este método só persiste."""
+        decididos por quem chama -- este método só persiste.
+
+        difficulty_rating/satisfaction_rating são opcionais (o front decide
+        quando pedir) e alimentam o contexto da adaptação depois.
+
+        Levanta MissionExecutionConflictError se essa missão+usuário já
+        tiver uma execução (corrida entre requisições concorrentes) -- quem
+        chama deve tratar isso como "já concluída", não como erro real."""
         ...
