@@ -186,3 +186,13 @@ class RoadmapRepository(Protocol):
         """Liga/desliga is_locked_from_ai -- um capítulo travado nunca é
         alvo de replace_chapter/insert_chapter pela adaptação."""
         ...
+
+    async def get_current_pending_mission_title_for_user(self, user_id: int) -> Optional[str]:
+        """Título da missão "atual" (primeira pendente do capítulo em
+        andamento) do objetivo ativo mais recente do usuário -- usado pra
+        enriquecer notificação de lembrete genérico (Reminder não é preso a
+        um goal específico, ver models.py). Se o usuário tiver mais de um
+        objetivo ativo, pega só o mais recente; se não achar nenhuma
+        missão pendente, devolve None (quem chama cai pro texto padrão do
+        lembrete)."""
+        ...

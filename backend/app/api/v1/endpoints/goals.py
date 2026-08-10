@@ -49,6 +49,7 @@ from app.application.knowledge.spaced_repetition import compute_mastery_level
 from app.core.ai.gemini_client import GeminiClient
 from app.core.ai.usage_logging import UsageCollector
 from app.core.config import settings
+from app.core.error_sanitization import safe_error_message
 from app.infrastructure.database.models import User
 from app.infrastructure.database.session import get_db_session
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
@@ -70,8 +71,6 @@ async def create_goal(
 ):
     user_repository = SQLAlchemyUserRepository(db)
 
-    # Cobra ANTES de criar qualquer coisa -- se não tiver crédito, nem cria
-    # o Goal (evita registro "fantasma" que nunca vai gerar roadmap mesmo).
     charged = await user_repository.try_deduct_credits(
         current_user.id, settings.CREDITS_COST_GENERATE_ROADMAP
     )
@@ -97,11 +96,6 @@ async def create_goal(
         prior_knowledge_level=payload.prior_knowledge_level,
     )
 
-    # Antes ia direto pra BackgroundTasks (perdido se o processo reiniciar
-    # no meio); agora entra na fila (background_jobs) processada pelo
-    # worker em app/core/jobs/worker.py. "intake_goal" modera + melhora o
-    # prompt + detecta info faltando, e só ENTÃO encadeia "generate_roadmap"
-    # -- ver app/core/jobs/handlers.py.
     await job_repository.enqueue("intake_goal", {"goal_id": goal.id}, user_id=current_user.id)
 
     return GoalCreatedResponse(
@@ -253,6 +247,7 @@ async def adapt_goal(
 ):
     goal_repository = SQLAlchemyGoalRepository(db)
     roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    recommendation_repository = SQLAlchemyRecommendationRepository(db)
     user_repository = SQLAlchemyUserRepository(db)
 
     # Confere posse ANTES de cobrar -- pedido pra um objetivo que não
@@ -316,7 +311,7 @@ async def adapt_goal(
             fallback_models=[settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL],
             on_usage=usage.logger_for("adapt_roadmap"),
         )
-        use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, ai_client)
+        use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, recommendation_repository, ai_client)
 
         try:
             result = await use_case.execute(
@@ -329,7 +324,15 @@ async def adapt_goal(
         except RoadmapNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         except AdaptationFailedError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+            # 503 quando a causa raiz foi o Gemini sobrecarregado mesmo
+            # depois de esgotar toda a cadeia de fallback (o front pode
+            # tratar isso como "tente de novo em instantes" de forma
+            # diferente de um 502 genérico). Mensagem sanitizada -- não
+            # expõe a exceção crua do Gemini pro usuário.
+            raise HTTPException(
+                status_code=exc.status_code or status.HTTP_502_BAD_GATEWAY,
+                detail=safe_error_message(exc, "Não foi possível adaptar o roadmap agora"),
+            )
     except HTTPException:
         # A ação não aconteceu de verdade -- devolve o crédito já cobrado.
         await user_repository.refund_credits(current_user.id, settings.CREDITS_COST_ADAPT)

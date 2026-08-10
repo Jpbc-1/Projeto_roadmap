@@ -94,6 +94,14 @@ export const colors = {
   notebookMarginLine: '#E08080', // the red margin line down the left side — same, purely decorative
   graphite: '#454545', // the "pencil sketch" roadmap path + node outlines — 8.9:1 on notebookPaper, safe even if used as text
 
+  // --- Rotina tab: open day-planner theme (a third distinct material —
+  // NOT the same paper as Objetivos: cooler/whiter page, gray rules
+  // instead of blue, no red margin/ring-holes, so the two notebook-ish
+  // tabs still read as different objects, not the same texture reused) ---
+  agendaPage: '#FFFFFF',
+  agendaRuleLine: '#E3E1DC', // decorative ruled lines, same non-contrast-checked treatment as notebookRuleLine
+  agendaGutterShadow: 'rgba(31,22,12,0.10)', // soft center crease, suggesting two open pages rather than one flat sheet
+
   // Spaced-repetition rating buttons (Again / Difícil / Médio / Fácil) —
   // a genuinely distinct rating scale, not one of the 5 app-wide systems,
   // so it gets its own small verified set. All >=4.5:1 with white text.
@@ -143,6 +151,12 @@ export const fonts = {
   bodyMedium: 'Inter_500Medium',
   bodySemiBold: 'Inter_600SemiBold',
   bodyBold: 'Inter_700Bold',
+  // Reservado pra UMA palavra por tela do fluxo de caderno/mesa (login,
+  // registro, onboarding) -- "Jornada", "Tudo pronto!" etc. Não é o
+  // display normal (Space Grotesk) porque o pedido específico foi um
+  // traço de grafite/lápis só no destaque principal; todo o resto do
+  // texto continua no sistema de tipografia padrão do app.
+  handwritten: 'Caveat_700Bold',
 } as const;
 
 export const typography = {

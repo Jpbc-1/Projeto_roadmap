@@ -1,6 +1,7 @@
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from app.application.knowledge.embedding_utils import find_duplicate_node
 from app.core.ai.gemini_client import GeminiClient
@@ -63,66 +64,79 @@ class ExtractKnowledgeNodesUseCase:
         self.extraction_ai_client = extraction_ai_client
         self.embedding_ai_client = embedding_ai_client
 
-    async def execute(self, goal_id: int, user_id: int, chapter_id: int) -> Optional[int]:
-        """Retorna quantos nós novos foram criados, ou None se nada foi
-        feito (goal não envolve aprendizado, nada conceitual no capítulo,
-        ou algo falhou). NUNCA deixa uma exceção escapar -- roda em
-        background, sem ninguém "ouvindo" pra tratar erro."""
-        try:
-            goal = await self.goal_repository.get_by_id(goal_id)
-            if goal is None or not goal.involves_learning:
-                return None
+    async def execute(
+        self, goal_id: int, user_id: int, chapter_id: int, user_timezone: str = "America/Sao_Paulo"
+    ) -> Optional[int]:
+        """Retorna quantos nós novos foram criados, ou None se não havia
+        nada conceitual pra extrair (goal inexistente ou capítulo sem
+        missão conceitual/sem conceito extraído -- isso NÃO é falha, é um
+        resultado válido).
 
-            all_missions = await self.roadmap_repository.get_missions_by_chapter(chapter_id)
-            missions = [m for m in all_missions if m.is_conceptual]
-            if not missions:
-                logger.info(
-                    "Knowledge map: capítulo %s sem missões conceituais (só prática/setup), pulando IA.",
-                    chapter_id,
-                )
-                return None
+        IMPORTANTE: diferente de antes, uma falha de verdade (erro da API
+        do Gemini, embedding, banco) agora SOBE pra quem chamou em vez de
+        ser engolida aqui. Quem processa isso é o worker
+        (app/core/jobs/handlers.py + worker.py), que já sabe: reverter a
+        sessão, logar o erro completo no servidor, guardar uma versão
+        sanitizada em job.last_error (consultável via GET /jobs/{id}), e
+        tentar de novo com backoff até JOB_MAX_ATTEMPTS. Um try/except
+        genérico aqui dentro escondia isso tudo -- o job aparecia como
+        "completed" mesmo quando a extração falhava silenciosamente, sem
+        nenhum rastro visível de que algo deu errado."""
+        goal = await self.goal_repository.get_by_id(goal_id)
+        if goal is None:
+            return None
 
-            concepts = await self._extract_concepts(goal, missions)
-            if not concepts:
-                logger.info("Knowledge map: capítulo %s sem conceitos conceituais.", chapter_id)
-                return None
-
-            existing_nodes = await self.knowledge_node_repository.get_by_goal(goal_id)
-
-            created_count = 0
-            for concept_name in concepts:
-                embedding = await self.embedding_ai_client.embed_text(concept_name)
-
-                duplicate = find_duplicate_node(embedding, existing_nodes)
-                if duplicate is not None:
-                    logger.info(
-                        "Knowledge map: '%s' já existe como '%s', não duplicando.",
-                        concept_name,
-                        duplicate.topic_name,
-                    )
-                    continue
-
-                node = await self.knowledge_node_repository.create(
-                    goal_id=goal_id,
-                    user_id=user_id,
-                    topic_name=concept_name,
-                    embedding=embedding,
-                    next_review_date=date.today() + timedelta(days=1),
-                )
-                existing_nodes.append(node)  
-                created_count += 1
-
+        all_missions = await self.roadmap_repository.get_missions_by_chapter(chapter_id)
+        missions = [m for m in all_missions if m.is_conceptual]
+        if not missions:
             logger.info(
-                "Knowledge map: %s conceito(s) novo(s) para o goal %s (capítulo %s).",
-                created_count,
-                goal_id,
+                "Knowledge map: capítulo %s sem missões conceituais (só prática/setup), pulando IA.",
                 chapter_id,
             )
-            return created_count
-
-        except Exception: 
-            logger.exception("Knowledge map: falha ao extrair conceitos do capítulo %s", chapter_id)
             return None
+
+        concepts = await self._extract_concepts(goal, missions)
+        if not concepts:
+            logger.info("Knowledge map: capítulo %s sem conceitos conceituais.", chapter_id)
+            return None
+
+        existing_nodes = await self.knowledge_node_repository.get_by_goal(goal_id)
+
+        try:
+            today_for_user = datetime.now(ZoneInfo(user_timezone)).date()
+        except Exception:
+            today_for_user = date.today()
+
+        created_count = 0
+        for concept_name in concepts:
+            embedding = await self.embedding_ai_client.embed_text(concept_name)
+
+            duplicate = find_duplicate_node(embedding, existing_nodes)
+            if duplicate is not None:
+                logger.info(
+                    "Knowledge map: '%s' já existe como '%s', não duplicando.",
+                    concept_name,
+                    duplicate.topic_name,
+                )
+                continue
+
+            node = await self.knowledge_node_repository.create(
+                goal_id=goal_id,
+                user_id=user_id,
+                topic_name=concept_name,
+                embedding=embedding,
+                next_review_date=today_for_user + timedelta(days=1),
+            )
+            existing_nodes.append(node)
+            created_count += 1
+
+        logger.info(
+            "Knowledge map: %s conceito(s) novo(s) para o goal %s (capítulo %s).",
+            created_count,
+            goal_id,
+            chapter_id,
+        )
+        return created_count
 
     async def _extract_concepts(self, goal, missions) -> List[str]:
         prompt = f"Objetivo: {goal.context_prompt}\n\nMissões concluídas neste capítulo:"

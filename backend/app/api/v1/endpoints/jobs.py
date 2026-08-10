@@ -22,8 +22,6 @@ async def get_job(
     job_repository = SQLAlchemyJobRepository(db)
     job = await job_repository.get_by_id(job_id)
 
-    # 404 em vez de 403 quando o job é de outro usuário -- não confirma pra
-    # quem está tentando adivinhar IDs que aquele job sequer existe.
     if job is None or job.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarefa não encontrada.")
 

@@ -13,9 +13,6 @@ class CalendarEventCreate(NotificationPreferenceFields):
     end_datetime: Optional[datetime] = None
     is_all_day: bool = False
     notify_enabled: bool = True
-    # Obrigatório só quando notify_enabled=True e timing_mode='custom'
-    # (ver validador). Até 1 semana (10080 min) antes -- só pra pegar erro
-    # de digitação.
     remind_before_minutes: Optional[int] = Field(default=None, ge=0, le=10080)
 
     @field_validator("end_datetime")

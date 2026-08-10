@@ -39,9 +39,6 @@ async def handle_intake_goal(session: AsyncSession, payload: Dict[str, Any]) -> 
     job_repository = SQLAlchemyJobRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
 
-    # Moderação: classificação simples e bem delimitada -> tarefa "fácil",
-    # direto no modelo mais fraco, sem cadeia (não sobra nível mais barato
-    # pra cair depois dele).
     moderation_ai_client = GeminiClient(
         api_key=settings.GEMINI_API_KEY,
         model=settings.GEMINI_FALLBACK_MODEL,
@@ -90,11 +87,9 @@ async def handle_generate_roadmap(session: AsyncSession, payload: Dict[str, Any]
 async def handle_adapt_roadmap(session: AsyncSession, payload: Dict[str, Any]) -> None:
     goal_repository = SQLAlchemyGoalRepository(session)
     roadmap_repository = SQLAlchemyRoadmapRepository(session)
+    recommendation_repository = SQLAlchemyRecommendationRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
 
-    # Adaptar é tão "complexo" quanto criar -- se a pessoa adaptou o roadmap
-    # inteiro, é praticamente como se tivesse criado outro. Fica no mesmo
-    # nível de GenerateRoadmapUseCase: pro -> médio -> fraco.
     ai_client = GeminiClient(
         api_key=settings.GEMINI_API_KEY,
         model=settings.GEMINI_PRO_MODEL,
@@ -102,7 +97,7 @@ async def handle_adapt_roadmap(session: AsyncSession, payload: Dict[str, Any]) -
         on_usage=usage.logger_for("adapt_roadmap"),
     )
 
-    use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, ai_client)
+    use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, recommendation_repository, ai_client)
     await use_case.execute(
         goal_id=payload["goal_id"], user_id=payload["user_id"], feedback=payload.get("feedback")
     )
@@ -112,14 +107,9 @@ async def handle_adapt_roadmap(session: AsyncSession, payload: Dict[str, Any]) -
 async def handle_auto_adapt_roadmap(session: AsyncSession, payload: Dict[str, Any]) -> None:
     goal_repository = SQLAlchemyGoalRepository(session)
     roadmap_repository = SQLAlchemyRoadmapRepository(session)
+    recommendation_repository = SQLAlchemyRecommendationRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
 
-    # Triagem: classificação simples (precisa adaptar sim/não) -> fácil,
-    # só o modelo fraco. Adaptação em si: mesma regra do handle_adapt_roadmap
-    # (pro -> médio -> fraco, é "criar de novo" na prática). Auto-adapt NÃO
-    # cobra crédito -- é disparado pelo sistema (a cada N capítulos), não
-    # por uma ação direta do usuário, e já é naturalmente limitado pelo
-    # próprio ritmo de uso da pessoa.
     triage_ai_client = GeminiClient(
         api_key=settings.GEMINI_API_KEY,
         model=settings.GEMINI_FALLBACK_MODEL,
@@ -132,7 +122,7 @@ async def handle_auto_adapt_roadmap(session: AsyncSession, payload: Dict[str, An
         on_usage=usage.logger_for("auto_adapt"),
     )
 
-    adapt_use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, adapt_ai_client)
+    adapt_use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, recommendation_repository, adapt_ai_client)
     use_case = AutoAdaptRoadmapUseCase(
         roadmap_repository=roadmap_repository,
         triage_ai_client=triage_ai_client,
@@ -170,7 +160,10 @@ async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[st
         embedding_ai_client=embedding_ai_client,
     )
     await use_case.execute(
-        goal_id=payload["goal_id"], user_id=payload["user_id"], chapter_id=payload["chapter_id"]
+        goal_id=payload["goal_id"],
+        user_id=payload["user_id"],
+        chapter_id=payload["chapter_id"],
+        user_timezone=payload.get("user_timezone", "America/Sao_Paulo"),
     )
     await usage.flush(session)
 
@@ -195,10 +188,16 @@ async def handle_send_reminder_notification(session: AsyncSession, payload: Dict
 
     if source_type == "reminder":
         reminder_repository = SQLAlchemyReminderRepository(session)
+        roadmap_repository = SQLAlchemyRoadmapRepository(session)
         reminder = await reminder_repository.get_by_id(source_id)
         if reminder is None or not reminder.is_active:
-            return  # apagado ou desligado entre o agendamento e agora -- não envia nada
-        content = resolve_reminder_content(reminder)
+            return 
+        pending_mission_title = None
+        if reminder.notification_style == "app_generated":
+            pending_mission_title = await roadmap_repository.get_current_pending_mission_title_for_user(
+                reminder.user_id
+            )
+        content = resolve_reminder_content(reminder, pending_mission_title=pending_mission_title)
         await _send_push(user_id=reminder.user_id, title=content.title, body=content.body)
 
     elif source_type == "calendar_event":
@@ -224,8 +223,6 @@ async def _send_push(user_id: int, title: str, body: str) -> None:
     logging.getLogger("reminders").info("PUSH (stub) user_id=%s title=%r body=%r", user_id, title, body)
 
 
-# Registro job_type -> handler. O worker usa isso pra despachar cada job
-# pro código certo (ver worker.py). Novo tipo de job = nova entrada aqui.
 JOB_HANDLERS = {
     "intake_goal": handle_intake_goal,
     "generate_roadmap": handle_generate_roadmap,

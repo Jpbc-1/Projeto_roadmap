@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from app.application.gamification.streak import calculate_streak_update
 from app.domain.repositories.mission_repository import MissionExecutionConflictError, MissionRepository
@@ -25,6 +26,8 @@ class MissionCompletionResult:
     roadmap_id: int
     goal_id: int
     chapter_completed_id: Optional[int]
+    current_streak: int
+    goal_completed: bool
 
 
 class CompleteMissionUseCase:
@@ -36,6 +39,7 @@ class CompleteMissionUseCase:
         mission_id: int,
         user_id: int,
         user_reflection: Optional[str],
+        user_timezone: str,
         difficulty_rating: Optional[str] = None,
         satisfaction_rating: Optional[int] = None,
     ) -> MissionCompletionResult:
@@ -58,7 +62,11 @@ class CompleteMissionUseCase:
         )
 
         stats = await self.mission_repository.get_user_stats(user_id)
-        streak_update = calculate_streak_update(stats, xp_to_add=xp_rewarded, today=date.today())
+        try:
+            today_for_user = datetime.now(ZoneInfo(user_timezone)).date()
+        except Exception:
+            today_for_user = date.today() 
+        streak_update = calculate_streak_update(stats, xp_to_add=xp_rewarded, today=today_for_user)
 
         try:
             execution = await self.mission_repository.persist_completion(
@@ -77,11 +85,6 @@ class CompleteMissionUseCase:
                 satisfaction_rating=satisfaction_rating,
             )
         except MissionExecutionConflictError:
-            # O check no início do método (has_execution) não é atômico --
-            # uma requisição concorrente pode ter gravado a execução entre
-            # aquele check e este persist_completion. A constraint única do
-            # banco pegou a corrida; do ponto de vista de quem chamou, o
-            # resultado é o mesmo de "já tinha sido concluída".
             raise MissionAlreadyCompletedError("Esta missão já foi concluída.")
 
         return MissionCompletionResult(
@@ -89,6 +92,8 @@ class CompleteMissionUseCase:
             roadmap_id=mission.chapter.roadmap_id,
             goal_id=mission.chapter.roadmap.goal_id,
             chapter_completed_id=chapter_id_to_complete,
+            current_streak=streak_update.new_current_streak,
+            goal_completed=chapter_id_to_complete is not None and next_chapter_id_to_unlock is None,
         )
 
     async def _check_chapter_progress(self, mission, user_id: int, mission_id: int):
@@ -96,7 +101,7 @@ class CompleteMissionUseCase:
         inteiro fica completo -- e se sim, qual é o próximo a desbloquear."""
         mission_ids = await self.mission_repository.get_mission_ids_in_chapter(mission.chapter_id)
         completed_ids = await self.mission_repository.get_completed_mission_ids(mission_ids, user_id)
-        completed_ids.add(mission_id)  # esta missão está prestes a ser concluída
+        completed_ids.add(mission_id)  
 
         chapter_will_be_completed = set(mission_ids) <= completed_ids
 

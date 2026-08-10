@@ -11,3 +11,11 @@ class RecommendationRepository(Protocol):
         ...
 
     async def get_by_goal(self, goal_id: int) -> List[GoalRecommendation]: ...
+
+    async def delete_by_goal(self, goal_id: int) -> None:
+        """Apaga as recomendações antigas de um goal -- usado quando o
+        capítulo 1 é substituído numa adaptação (o rumo do objetivo mudou
+        tanto quanto se ele tivesse sido criado de novo, então as
+        recomendações antigas, do rumo anterior, também precisam ser
+        trocadas, igual o título já era)."""
+        ...

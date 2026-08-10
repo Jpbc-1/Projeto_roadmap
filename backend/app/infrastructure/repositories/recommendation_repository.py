@@ -1,6 +1,6 @@
 from typing import Any, List
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import GoalRecommendation
@@ -28,7 +28,7 @@ class SQLAlchemyRecommendationRepository:
             name = str(item.get("name") or "").strip()
             description = str(item.get("description") or "").strip()
             if not name or not description:
-                continue  # entrada malformada da IA -- ignora em vez de quebrar tudo
+                continue  
             recommendation = GoalRecommendation(
                 goal_id=goal_id,
                 name=name[:150],
@@ -49,3 +49,7 @@ class SQLAlchemyRecommendationRepository:
             select(GoalRecommendation).where(GoalRecommendation.goal_id == goal_id)
         )
         return list(result.scalars().all())
+
+    async def delete_by_goal(self, goal_id: int) -> None:
+        await self.session.execute(delete(GoalRecommendation).where(GoalRecommendation.goal_id == goal_id))
+        await self.session.commit()

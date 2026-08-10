@@ -1,152 +1,221 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Text, TouchableOpacity, View, ScrollView, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useQueryClient } from '@tanstack/react-query';
 import { colors, spacing, radius, typography, fonts, touchTarget } from '../theme/colors';
 import NotebookBackground from '../components/NotebookBackground';
-import RoadmapSketch, { SketchChapter } from '../components/RoadmapSketch';
-import ReviewStack from '../components/ReviewStack';
-import FlashcardReview, { Flashcard } from '../components/FlashcardReview';
+import JourneyPath from '../components/JourneyPath';
+import ReviewPostIt from '../components/ReviewPostIt';
+import FlashcardReview from '../components/FlashcardReview';
+import ChapterDetailScreen from './ChapterDetailScreen';
+import GoalIntakeScreen from './GoalIntakeScreen';
+import GoalProcessingScreen from './GoalProcessingScreen';
+import { useGoals, useRoadmap, useDueReviews, useAnswerReview } from '../hooks/useObjetivos';
+import { roadmapService } from '../services/roadmapService';
 
-type Roadmap = {
-  key: string;
-  title: string;
-  tint: string;
-  chapters: SketchChapter[];
-};
-
-const ROADMAPS: Roadmap[] = [
-  {
-    key: 'python',
-    title: 'Python p/ Dados',
-    tint: colors.postIt.yellow,
-    chapters: [
-      { title: 'Primeiros passos', status: 'completed' },
-      { title: 'Estrutura de dados', status: 'completed' },
-      { title: 'DataFrames', status: 'current' },
-      { title: 'Limpeza de dados', status: 'locked' },
-      { title: 'Visualização', status: 'locked' },
-    ],
-  },
-  {
-    key: 'sql',
-    title: 'SQL',
-    tint: colors.postIt.blue,
-    chapters: [
-      { title: 'Select básico', status: 'completed' },
-      { title: 'Filtros', status: 'current' },
-      { title: 'Joins', status: 'locked' },
-      { title: 'Agregações', status: 'locked' },
-    ],
-  },
-  {
-    key: 'estatistica',
-    title: 'Estatística',
-    tint: colors.postIt.green,
-    chapters: [
-      { title: 'Medidas centrais', status: 'current' },
-      { title: 'Dispersão', status: 'locked' },
-      { title: 'Distribuições', status: 'locked' },
-    ],
-  },
-];
-
-const REVIEW_CARDS: Flashcard[] = [
-  { question: 'O que é um DataFrame?', answer: 'Uma estrutura de dados em forma de tabela do pandas — linhas e colunas, como uma planilha.' },
-  { question: 'Comando pra ver as 5 primeiras linhas', answer: 'df.head()' },
-  { question: 'O que faz um INNER JOIN?', answer: 'Combina linhas de duas tabelas onde a condição de junção é verdadeira nas duas.' },
-  { question: 'Mediana vs média: quando usar mediana?', answer: 'Quando há valores extremos (outliers) que distorceriam a média.' },
-];
+// Mesma ideia do UpcomingChip na Rotina: cores puramente decorativas pra
+// diferenciar objetivos lado a lado, sem inventar um significado novo
+// pros 5 tons semânticos que colors.ts já define.
+const GOAL_TINTS = [colors.postIt.yellow, colors.postIt.blue, colors.postIt.pink, colors.postIt.green, colors.postIt.peach];
 
 export default function ObjetivosScreen() {
-  const [selectedRoadmap, setSelectedRoadmap] = useState(ROADMAPS[0].key);
-  const [reviewing, setReviewing] = useState(false);
+  const goalsQuery = useGoals();
+  const goals = goalsQuery.data ?? [];
 
-  const roadmap = ROADMAPS.find((r) => r.key === selectedRoadmap) ?? ROADMAPS[0];
-  const completedCount = ROADMAPS.reduce(
-    (sum, r) => sum + r.chapters.filter((c) => c.status === 'completed').length,
-    0
-  );
+  const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null);
+  const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [creatingGoal, setCreatingGoal] = useState(false);
+  const [pendingNewGoalId, setPendingNewGoalId] = useState<number | null>(null);
+
+  // Seleciona o primeiro objetivo assim que a lista chega -- só na
+  // primeira vez (não força de volta pro primeiro se o usuário trocar
+  // de aba manualmente depois).
+  useEffect(() => {
+    if (selectedGoalId === null && goals.length > 0) {
+      setSelectedGoalId(goals[0].id);
+    }
+  }, [goals, selectedGoalId]);
+
+  const goalIndex = Math.max(goals.findIndex((g) => g.id === selectedGoalId), 0);
+  const accentTint = GOAL_TINTS[goalIndex % GOAL_TINTS.length];
+
+  const roadmapQuery = useRoadmap(selectedGoalId);
+  const dueReviewsQuery = useDueReviews();
+  const answerReview = useAnswerReview();
+
+  // Trocar de marcador deveria parecer abrir outro caderno que já
+  // estava ali na mesa, não carregar algo novo -- então, assim que o
+  // roadmap que a pessoa está OLHANDO termina de carregar, aproveita a
+  // deixa e vai esquentando o cache dos outros objetivos em segundo
+  // plano (com um respiro entre cada um, pra não competir por banda com
+  // o que importa agora). Se a pessoa nunca tocar noutro marcador, esse
+  // trabalho não custou nada além de uns bytes; se tocar, a troca é
+  // instantânea.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (roadmapQuery.isLoading || goals.length < 2) return;
+    const others = goals.filter((g) => g.id !== selectedGoalId);
+    const timeouts = others.map((goal, i) =>
+      setTimeout(() => {
+        queryClient.prefetchQuery({
+          queryKey: ['roadmap', goal.id],
+          queryFn: () => roadmapService.getRoadmap(goal.id),
+        });
+      }, 350 + i * 300)
+    );
+    return () => timeouts.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goals, selectedGoalId, roadmapQuery.isLoading]);
+
+  const chapters = roadmapQuery.data?.chapters ?? [];
+  const chaptersDone = chapters.filter((c) => c.status === 'completed').length;
+  const overallProgress = chapters.length > 0 ? Math.round((chaptersDone / chapters.length) * 100) : 0;
+
+  // --- criando um novo objetivo (reaproveita o mesmo fluxo do onboarding) ---
+  if (pendingNewGoalId !== null) {
+    return (
+      <GoalProcessingScreen
+        goalId={pendingNewGoalId}
+        onComplete={() => {
+          setPendingNewGoalId(null);
+          setSelectedGoalId(pendingNewGoalId);
+        }}
+      />
+    );
+  }
+  if (creatingGoal) {
+    return <GoalIntakeScreen onCreated={(id) => { setCreatingGoal(false); setPendingNewGoalId(id); }} />;
+  }
+
+  // --- olhando o capítulo de um objetivo ---
+  const selectedChapter = roadmapQuery.data?.chapters.find((c) => c.id === selectedChapterId) ?? null;
+  if (selectedChapter && selectedGoalId !== null) {
+    return <ChapterDetailScreen chapter={selectedChapter} goalId={selectedGoalId} onBack={() => setSelectedChapterId(null)} />;
+  }
 
   return (
     <NotebookBackground>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.heading}>Seus Objetivos</Text>
-        <Text style={styles.subheading}>Cada roadmap, desenhado como uma trilha no seu caderno</Text>
-
-        <View style={styles.tabRow}>
-          {ROADMAPS.map((r) => {
-            const active = r.key === selectedRoadmap;
+      <View style={styles.header}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabsContent}>
+          {goals.map((goal, i) => {
+            const active = goal.id === selectedGoalId;
             return (
               <TouchableOpacity
-                key={r.key}
-                style={[styles.tab, { backgroundColor: active ? r.tint : 'transparent', borderColor: colors.graphite }]}
-                onPress={() => setSelectedRoadmap(r.key)}
+                key={goal.id}
+                style={[
+                  styles.tab,
+                  active && styles.tabActive,
+                  { backgroundColor: active ? GOAL_TINTS[i % GOAL_TINTS.length] : 'transparent' },
+                ]}
+                onPress={() => setSelectedGoalId(goal.id)}
                 accessibilityRole="tab"
                 accessibilityState={{ selected: active }}
               >
                 <Text style={[styles.tabText, active && styles.tabTextActive]} numberOfLines={1}>
-                  {r.title}
+                  {goal.title ?? 'Sem título'}
                 </Text>
               </TouchableOpacity>
             );
           })}
-        </View>
+          <TouchableOpacity style={styles.newTab} onPress={() => setCreatingGoal(true)} accessibilityRole="button" accessibilityLabel="Novo objetivo">
+            <Ionicons name="add" size={18} color={colors.textPrimary} />
+          </TouchableOpacity>
+        </ScrollView>
 
-        <View style={styles.sketchCard}>
-          <RoadmapSketch chapters={roadmap.chapters} />
-        </View>
-
-        <View style={styles.tallyRow}>
-          <Ionicons name="checkmark-done" size={16} color={colors.success} />
-          <Text style={styles.tallyText}>{completedCount} capítulos concluídos ao todo</Text>
-        </View>
-
-        {reviewing ? (
-          <FlashcardReview
-            cards={REVIEW_CARDS}
-            onClose={() => setReviewing(false)}
-            onComplete={() => setReviewing(false)}
-          />
-        ) : (
-          <ReviewStack pendingCount={REVIEW_CARDS.length} onStart={() => setReviewing(true)} />
+        {(dueReviewsQuery.data?.length ?? 0) > 0 && (
+          <ReviewPostIt count={dueReviewsQuery.data!.length} onPress={() => setReviewing(true)} />
         )}
+      </View>
 
-        <TouchableOpacity style={styles.newGoalButton} accessibilityRole="button" accessibilityLabel="Novo objetivo">
-          <Ionicons name="add" size={18} color={colors.textPrimary} />
-          <Text style={styles.newGoalText}>Novo objetivo</Text>
-        </TouchableOpacity>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {goalsQuery.isLoading ? (
+          <ActivityIndicator style={styles.loading} color={colors.graphite} />
+        ) : goals.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>Você ainda não tem nenhum objetivo por aqui.</Text>
+            <TouchableOpacity style={styles.emptyButton} onPress={() => setCreatingGoal(true)}>
+              <Text style={styles.emptyButtonText}>Criar meu primeiro objetivo</Text>
+            </TouchableOpacity>
+          </View>
+        ) : selectedGoalId === null || roadmapQuery.isLoading ? (
+          // selectedGoalId === null cobre o instante entre "a lista de
+          // objetivos chegou" e "o efeito que seleciona o primeiro deles
+          // rodou" -- sem isso, o JourneyPath chegava a piscar por um
+          // frame com "ainda sendo desenhada" antes do spinner de
+          // verdade assumir.
+          <ActivityIndicator style={styles.loading} color={colors.graphite} />
+        ) : (
+          <>
+            {roadmapQuery.data && (
+              <View style={styles.goalHeaderRow}>
+                <Text style={styles.goalHeaderTitle} numberOfLines={2}>
+                  {goals.find((g) => g.id === selectedGoalId)?.title ?? 'Seu objetivo'}
+                </Text>
+                {chapters.length > 0 && (
+                  <View style={[styles.goalProgressPill, { backgroundColor: accentTint }]}>
+                    <Text style={styles.goalProgressPillText}>{overallProgress}%</Text>
+                  </View>
+                )}
+              </View>
+            )}
+            <JourneyPath chapters={chapters} accentTint={accentTint} onSelectChapter={setSelectedChapterId} />
+          </>
+        )}
       </ScrollView>
+
+      {reviewing && (dueReviewsQuery.data?.length ?? 0) > 0 && (
+        <FlashcardReview
+          cards={dueReviewsQuery.data!}
+          onClose={() => setReviewing(false)}
+          onAnswer={async (nodeId, difficulty) => {
+            await answerReview.mutateAsync({ nodeId, difficulty });
+          }}
+        />
+      )}
     </NotebookBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    padding: spacing.md,
-    paddingBottom: spacing.xl,
-  },
-  heading: {
-    ...typography.screenTitle,
-    color: colors.textPrimary,
-  },
-  subheading: {
-    ...typography.body,
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.sm,
-    marginBottom: spacing.lg,
-  },
-  tabRow: {
+  header: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
     gap: spacing.sm,
-    marginBottom: spacing.sm,
+  },
+  tabsScroll: {
+    flex: 1,
+  },
+  tabsContent: {
+    gap: spacing.sm,
+    paddingRight: spacing.sm,
   },
   tab: {
-    minHeight: touchTarget,
+    minHeight: touchTarget - 8,
     borderWidth: 1.5,
-    borderRadius: radius.sm,
+    borderColor: colors.graphite,
+    // Topo reto, base arredondada -- lê como um marcador pendurado do
+    // topo da página, não como um botão solto. A aba ativa ganha uma
+    // leve sombra (ver tabActive) pra parecer "levantada" sobre as
+    // outras, feito uma aba de fato selecionada num fichário.
+    borderTopWidth: 0,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    borderBottomLeftRadius: radius.sm,
+    borderBottomRightRadius: radius.sm,
     paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
     justifyContent: 'center',
+    maxWidth: 140,
+  },
+  tabActive: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 3,
   },
   tabText: {
     ...typography.caption,
@@ -156,36 +225,66 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: colors.textPrimary,
   },
-  sketchCard: {
-    backgroundColor: colors.notebookPaper,
+  newTab: {
+    width: touchTarget - 8,
+    height: touchTarget - 8,
     borderRadius: radius.sm,
-    paddingVertical: spacing.md,
-  },
-  tallyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  tallyText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  newGoalButton: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: spacing.sm,
-    minHeight: touchTarget,
-    marginTop: spacing.lg,
-    borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.graphite,
     borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  newGoalText: {
+  content: {
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+  },
+  goalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  goalHeaderTitle: {
+    ...typography.screenTitle,
+    flex: 1,
+    color: colors.textPrimary,
+  },
+  goalProgressPill: {
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 4,
+  },
+  goalProgressPillText: {
+    fontFamily: fonts.display,
+    fontSize: 13,
+    color: colors.textPrimary,
+  },
+  loading: {
+    marginTop: spacing.xl,
+  },
+  emptyState: {
+    alignItems: 'center',
+    marginTop: spacing.xl,
+    gap: spacing.md,
+  },
+  emptyText: {
+    ...typography.body,
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  emptyButton: {
+    minHeight: touchTarget,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.textPrimary,
+  },
+  emptyButtonText: {
+    ...typography.body,
     fontFamily: fonts.bodySemiBold,
     fontSize: 14,
-    color: colors.textPrimary,
+    color: colors.surface,
   },
 });

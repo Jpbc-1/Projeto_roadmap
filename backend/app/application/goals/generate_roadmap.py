@@ -1,7 +1,9 @@
 from datetime import date
 
 from app.core.ai.gemini_client import GeminiClient
+from app.core.ai.prompt_safety import PROMPT_INJECTION_GUARD, wrap_user_text
 from app.core.config import settings
+from app.core.error_sanitization import safe_error_message
 from app.domain.repositories.goal_repository import GoalRepository
 from app.domain.repositories.recommendation_repository import RecommendationRepository
 from app.domain.repositories.roadmap_repository import RoadmapRepository
@@ -110,15 +112,9 @@ conteúdo, gere o conteúdo real baseado no objetivo do usuário):
     {"name": "python.org/docs", "description": "Documentação oficial, referência gratuita e completa", "is_paid": false}
   ]
 }
-"""
+""" + PROMPT_INJECTION_GUARD
 
-# Orientação extra injetada no prompt conforme a categoria do objetivo
-# (definida pela moderação, ver moderate_goal_content.py). Cada uma ataca um
-# viés comum da IA nessa categoria -- ex: em FITNESS ela tende a ensinar
-# teoria/anatomia que ninguém pediu; em CAREER ela tende a esquecer o lado
-# prático (currículo, entrevista) e só ensinar conteúdo técnico. Categorias
-# sem entrada aqui (LEARNING, PROJECT, OTHER) usam só a instrução geral --
-# não precisam de correção de viés específica.
+
 CATEGORY_GUIDANCE = {
     "FITNESS": """
 Este objetivo é de FITNESS. A pessoa quer resultado físico e organização de
@@ -215,9 +211,6 @@ class GenerateRoadmapUseCase:
 
             recommendations_data = result.get("recommendations")
             if isinstance(recommendations_data, list) and recommendations_data:
-                # Não deixa a IA exagerar: no máximo 3 pagas + 3 gratuitas
-                # de propósito (pedido no prompt), isso aqui é só uma trava
-                # técnica de segurança, igual _apply_safety_limits.
                 await self.recommendation_repository.bulk_create(goal.id, recommendations_data[:6])
 
             await self.goal_repository.update(
@@ -228,31 +221,18 @@ class GenerateRoadmapUseCase:
             )
 
         except Exception as exc:  
-            # Se a exceção veio de uma falha de banco dentro do bloco try
-            # (ex: create_full_roadmap com um tipo inesperado vindo da IA),
-            # a sessão fica "suja" e precisa de rollback antes de aceitar
-            # qualquer novo comando -- inclusive este update de status, que
-            # senão falharia também, deixando o goal preso em "pending"
-            # para sempre (o job já não tenta de novo depois de esgotar as
-            # tentativas, e ninguém mais vai atualizar esse goal).
             await self.goal_repository.rollback()
             await self.goal_repository.update(
                 goal_id,
                 generation_status="failed",
-                generation_error=str(exc),
+                generation_error=safe_error_message(exc, "Não foi possível gerar seu roadmap"),
             )
-            # A geração não aconteceu de verdade -- devolve o crédito já
-            # cobrado em POST /goals (ver goals.py).
             await self.user_repository.refund_credits(goal.user_id, settings.CREDITS_COST_GENERATE_ROADMAP)
 
     @staticmethod
     def _build_generation_prompt(goal) -> str:
-        # improved_prompt é o context_prompt original com clareza/gramática
-        # melhoradas pela triagem inicial (e possivelmente enriquecido com
-        # respostas às perguntas de esclarecimento) -- cai pro original se,
-        # por algum motivo, a triagem não tiver rodado.
         effective_prompt = goal.improved_prompt or goal.context_prompt
-        prompt = f"Objetivo do usuário: {effective_prompt}"
+        prompt = f"Objetivo do usuário:\n{wrap_user_text(effective_prompt)}"
 
         if goal.target_date is not None:
             prompt += (

@@ -21,3 +21,14 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class GoogleLoginRequest(BaseModel):
+    # ID token que o app recebe do SDK nativo do Google Sign-In -- NÃO é
+    # um código de autorização, é o JWT já pronto pra ser verificado.
+    id_token: str
+
+
+class FacebookLoginRequest(BaseModel):
+    # Access token que o app recebe do SDK nativo do Facebook Login.
+    access_token: str

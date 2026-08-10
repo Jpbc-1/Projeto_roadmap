@@ -55,10 +55,6 @@ class UpdateCalendarEventUseCase:
         if custom_message is not None:
             fields["custom_message"] = custom_message
 
-        # notify_enabled, timing_mode e remind_before_minutes andam juntos
-        # -- mesma lógica do create, resolvidos de novo aqui pra nunca
-        # deixar o registro num estado inconsistente (ex: notify_enabled
-        # ligado com remind_before_minutes nulo).
         effective_notify = notify_enabled if notify_enabled is not None else existing.notify_enabled
         effective_mode = notification_timing_mode or existing.notification_timing_mode
 

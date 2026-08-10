@@ -47,7 +47,7 @@ python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 A API sobe em `http://localhost:8000` e a documentação interativa (Swagger) em `http://localhost:8000/docs`.
@@ -58,7 +58,3 @@ MVP em desenvolvimento — foco inicial no nicho de **Educação/Tecnologia**, c
 
 `Objetivo → Roadmap → Missões Diárias → Execução → Evolução → Adaptação do Roadmap`
 
-## 📄 Documentação
-
-- [ADRs (decisões de arquitetura)](docs/adr)
-- [Modelagem do banco de dados](docs/database)

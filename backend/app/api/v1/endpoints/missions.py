@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user
+from app.api.v1.schemas.achievements import AchievementOut
 from app.api.v1.schemas.missions import (
     MissionCompleteRequest,
     MissionCreateRequest,
@@ -9,6 +10,7 @@ from app.api.v1.schemas.missions import (
     MissionOut,
     MissionUpdateRequest,
 )
+from app.application.gamification.check_achievements import CheckAchievementsUseCase
 from app.application.goals.get_goal import GoalAccessDeniedError, GoalNotFoundError
 from app.application.missions.complete_mission import (
     CompleteMissionUseCase,
@@ -27,6 +29,7 @@ from app.application.roadmaps.get_roadmap import RoadmapNotFoundError
 from app.core.config import settings
 from app.infrastructure.database.models import User
 from app.infrastructure.database.session import get_db_session
+from app.infrastructure.repositories.achievement_repository import SQLAlchemyAchievementRepository
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
 from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
 from app.infrastructure.repositories.mission_repository import SQLAlchemyMissionRepository
@@ -48,7 +51,9 @@ async def complete_mission(
 ):
     mission_repository = SQLAlchemyMissionRepository(db)
     roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    goal_repository = SQLAlchemyGoalRepository(db)
     job_repository = SQLAlchemyJobRepository(db)
+    achievement_repository = SQLAlchemyAchievementRepository(db)
     use_case = CompleteMissionUseCase(mission_repository)
 
     try:
@@ -56,6 +61,7 @@ async def complete_mission(
             mission_id=mission_id,
             user_id=current_user.id,
             user_reflection=payload.user_reflection,
+            user_timezone=current_user.timezone,
             difficulty_rating=payload.difficulty_rating,
             satisfaction_rating=payload.satisfaction_rating,
         )
@@ -65,16 +71,13 @@ async def complete_mission(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     if result.chapter_completed_id is not None:
-        # Extração de conhecimento roda em TODO capítulo concluído (o use
-        # case decide sozinho se o goal envolve aprendizado). Antes ia
-        # direto pra BackgroundTasks; agora entra na fila (background_jobs),
-        # que sobrevive a restart e tenta de novo sozinha se falhar.
         await job_repository.enqueue(
             "extract_knowledge_nodes",
             {
                 "goal_id": result.goal_id,
                 "user_id": current_user.id,
                 "chapter_id": result.chapter_completed_id,
+                "user_timezone": current_user.timezone,
             },
             user_id=current_user.id,
         )
@@ -91,7 +94,18 @@ async def complete_mission(
                 user_id=current_user.id,
             )
 
-    return result.execution
+    if result.goal_completed:
+        await goal_repository.update(result.goal_id, status="achieved")
+
+    newly_unlocked = await CheckAchievementsUseCase(achievement_repository).execute(
+        user_id=current_user.id, current_streak=result.current_streak
+    )
+
+    response = MissionExecutionOut.model_validate(result.execution)
+    response.chapter_completed = result.chapter_completed_id is not None
+    response.goal_completed = result.goal_completed
+    response.newly_unlocked_achievements = [AchievementOut.model_validate(a) for a in newly_unlocked]
+    return response
 
 
 @router.post("", response_model=MissionOut, status_code=status.HTTP_201_CREATED)

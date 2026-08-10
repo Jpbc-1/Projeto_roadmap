@@ -1,8 +1,8 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import Reminder, User
@@ -66,11 +66,6 @@ class SQLAlchemyReminderRepository:
             await self.session.commit()
 
     async def list_due(self, now_utc: datetime) -> List[Reminder]:
-        # JOIN com User pra ter o fuso de cada dono junto -- sem isso, "8h"
-        # significaria coisas diferentes (e provavelmente erradas) pra
-        # gente em fusos diferentes do servidor. Filtra em Python porque
-        # comparar "dia da semana + hora, já convertido pro fuso de cada
-        # linha" não dá pra expressar direto num WHERE simples.
         result = await self.session.execute(
             select(Reminder, User.timezone)
             .join(User, User.id == Reminder.user_id)
@@ -82,16 +77,51 @@ class SQLAlchemyReminderRepository:
             try:
                 tz = ZoneInfo(user_timezone)
             except Exception:
-                tz = ZoneInfo("UTC")  # defensivo: fuso inválido salvo por engano não deveria travar o agendador
+                tz = ZoneInfo("UTC") 
 
             local_now = now_utc.astimezone(tz)
-            our_weekday = (local_now.weekday() + 1) % 7  # Python: 0=segunda -> nosso: 0=domingo
+            our_weekday = (local_now.weekday() + 1) % 7  
+            today_local = local_now.date()
 
             if our_weekday not in reminder.days_of_week:
                 continue
-            if reminder.time_of_day.replace(second=0, microsecond=0) == local_now.time().replace(
-                second=0, microsecond=0
-            ):
-                due.append(reminder)
+            if local_now.time() < reminder.time_of_day:
+                continue  
+            if reminder.last_dispatched_date == today_local:
+                continue  
+
+            due.append(reminder)
 
         return due
+
+    async def try_claim_dispatch(self, reminder_id: int) -> bool:
+        """Recalcula 'hoje' sozinho, no fuso do DONO do lembrete -- não
+        recebe a data de fora. Se o chamador calculasse 'hoje' com
+        date.today() (fuso do servidor) e passasse pra cá, essa data podia
+        divergir da que list_due usou pra decidir "ainda não disparou
+        hoje" pra ESSE MESMO lembrete, bem perto da virada da meia-noite
+        -- a mesma pergunta ("que dia é hoje pra essa pessoa") tem que ser
+        respondida do mesmo jeito nos dois lugares."""
+        result = await self.session.execute(
+            select(Reminder, User.timezone).join(User, User.id == Reminder.user_id).where(Reminder.id == reminder_id)
+        )
+        row = result.first()
+        if row is None:
+            return False
+        _, user_timezone = row
+
+        try:
+            today_local = datetime.now(ZoneInfo(user_timezone)).date()
+        except Exception:
+            today_local = datetime.now(ZoneInfo("UTC")).date()
+
+        update_result = await self.session.execute(
+            update(Reminder)
+            .where(
+                Reminder.id == reminder_id,
+                or_(Reminder.last_dispatched_date.is_(None), Reminder.last_dispatched_date < today_local),
+            )
+            .values(last_dispatched_date=today_local)
+        )
+        await self.session.commit()
+        return update_result.rowcount > 0

@@ -8,10 +8,6 @@ from app.api.v1.schemas.notification_preferences import NotificationPreferenceFi
 
 class ReminderCreate(NotificationPreferenceFields):
     label: str = Field(..., max_length=120, examples=["Lembrete da manhã"])
-    # Ambos opcionais de propósito: só obrigatórios quando
-    # notification_timing_mode='custom' (ver validador). Quando
-    # 'app_default', o caso de uso preenche com core/notification_defaults.py
-    # e ignora o que vier aqui.
     time_of_day: Optional[time] = Field(default=None, examples=["08:00:00"])
     days_of_week: Optional[List[int]] = Field(default=None, examples=[[0, 1, 2, 3, 4, 5, 6]])
 

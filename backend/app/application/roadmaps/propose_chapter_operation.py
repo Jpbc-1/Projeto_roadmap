@@ -95,7 +95,7 @@ class NoActionableFeedbackError(Exception):
 
 @dataclass
 class ChapterOperationResult:
-    scope: str  # "chapter_operation" | "broad"
+    scope: str 
     operation: Optional[Dict[str, Any]] = None
     roadmap_id: Optional[int] = None
 
@@ -132,9 +132,6 @@ class ProposeChapterOperationUseCase:
             raise RoadmapNotFoundError("Nenhum roadmap ativo para este objetivo ainda.")
 
         if not feedback or not feedback.strip():
-            # Sem feedback direto, é sempre a triagem/adaptação automática
-            # de sinais gerais -- nunca dá pra saber que capítulo específico
-            # sem a pessoa ter dito nada.
             return ChapterOperationResult(scope="broad", roadmap_id=roadmap.id)
 
         chapters_context = [
@@ -158,8 +155,6 @@ class ProposeChapterOperationUseCase:
                 response_schema=CHAPTER_OPERATION_SCHEMA,
             )
         except Exception:
-            # Falha aqui não pode travar a adaptação -- cai pro fluxo
-            # amplo de sempre em vez de propagar erro.
             return ChapterOperationResult(scope="broad", roadmap_id=roadmap.id)
 
         scope = result.get("scope") if isinstance(result, dict) else None
@@ -168,10 +163,6 @@ class ProposeChapterOperationUseCase:
         if scope != "chapter_operation" or not isinstance(operation, dict):
             return ChapterOperationResult(scope="broad", roadmap_id=roadmap.id)
 
-        # Confiança zero no prompt sozinho -- revalida em código as MESMAS
-        # regras que o prompt já pede (capítulo existe, não concluído, não
-        # bloqueado, tipo de operação válido). A IA pode errar ou ignorar
-        # instrução ocasionalmente; isso aqui é a rede de segurança real.
         target_chapter = next(
             (c for c in roadmap.chapters if c.id == operation.get("target_chapter_id")), None
         )

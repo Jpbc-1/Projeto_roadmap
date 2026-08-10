@@ -35,16 +35,26 @@ class Settings(BaseSettings):
     AUTO_ADAPT_EVERY_N_CHAPTERS: int = 2
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
 
+    
     JOB_POLL_INTERVAL_SECONDS: float = 2.0
     JOB_BATCH_SIZE: int = 5
     JOB_MAX_ATTEMPTS: int = 3
     JOB_STALE_AFTER_SECONDS: int = 600
 
+   
     REMINDER_SCHEDULER_INTERVAL_SECONDS: float = 60.0
 
     CREDITS_FREE_PLAN_STARTING: int = 500
     CREDITS_COST_GENERATE_ROADMAP: int = 150
     CREDITS_COST_ADAPT: int = 60
+
+    LOGIN_RATE_LIMIT_PER_EMAIL: int = 5
+    LOGIN_RATE_LIMIT_PER_IP: int = 20
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 900
+
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    FACEBOOK_APP_ID: str = ""
+    FACEBOOK_APP_SECRET: str = ""
 
     class Config:
         env_file = ".env"

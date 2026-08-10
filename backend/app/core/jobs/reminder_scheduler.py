@@ -2,11 +2,21 @@
 separada do worker de jobs (worker.py) de propósito -- o worker processa
 jobs que já existem na fila, esse aqui é quem DECIDE que um job novo
 precisa existir, checando a cada minuto quem tem lembrete/compromisso
-batendo com "agora". Roda todo minuto (não no mesmo intervalo do worker,
-que é a cada 2s -- não faz sentido nem é barato checar "está na hora"
-tantas vezes por minuto) e enfileira em background_jobs -- o worker que
-já existe cuida do resto (retry, backoff, etc.), sem duplicar nada disso
-aqui.
+devido agora. Roda todo minuto (não no mesmo intervalo do worker, que é a
+cada 2s -- não faz sentido nem é barato checar isso tantas vezes por
+minuto) e enfileira em background_jobs -- o worker que já existe cuida do
+resto (retry, backoff, etc.), sem duplicar nada disso aqui.
+
+IMPORTANTE -- múltiplas réplicas: cada réplica roda o próprio loop, sem
+coordenação nenhuma entre elas, DE PROPÓSITO. Não existe checkpoint local
+(nem "última checagem em memória", nem lock distribuído) porque a
+dedução de quem já disparou o quê mora inteiramente no banco
+(Reminder.last_dispatched_date / CalendarEvent.reminder_dispatched_at,
+via try_claim_dispatch -- ver ScheduleDueRemindersUseCase). Isso é o que
+resolve duplicar/perder notificação com múltiplas réplicas: não interessa
+quantas réplicas rodem esse loop ao mesmo tempo, cada lembrete só é
+reivindicado por UMA delas, e a fonte de verdade sobrevive a qualquer
+réplica reiniciando (diferente de estado em memória do processo).
 """
 
 import asyncio

@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.infrastructure.database.models import Mission, MissionExecution, Roadmap, RoadmapChapter
+from app.infrastructure.database.models import Goal, Mission, MissionExecution, Roadmap, RoadmapChapter
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -202,10 +202,6 @@ class SQLAlchemyRoadmapRepository:
     ) -> RoadmapChapter:
         target_order_index = after_order_index + 1
 
-        # Abre espaço: todo capítulo que já estava na posição alvo (ou
-        # depois) anda +1. Em ordem DESCENDENTE por segurança -- não tem
-        # constraint de unicidade em (roadmap_id, order_index) hoje, mas
-        # assim evita colisão transitória se um dia passar a ter.
         result = await self.session.execute(
             select(RoadmapChapter)
             .where(
@@ -379,9 +375,6 @@ class SQLAlchemyRoadmapRepository:
             description=description,
             estimated_minutes=estimated_minutes,
             order_index=next_order_index,
-            # Missão manual: sem classificação da IA disponível, assume-se
-            # conceitual (comportamento mais conservador -- na dúvida, entra
-            # no Mapa do Conhecimento em vez de ser silenciosamente ignorada).
             is_conceptual=True,
             created_by="user",
         )
@@ -410,10 +403,6 @@ class SQLAlchemyRoadmapRepository:
 
         await self.session.execute(delete(Mission).where(Mission.id == mission_id))
 
-        # Reordena o que sobrou pra fechar o buraco no order_index (ex:
-        # [0,1,2,3] apagando o de índice 1 virava [0,2,3] -- agora vira
-        # [0,1,2]). Reatribui só quem realmente mudou, pra não gerar UPDATE
-        # à toa em missões que já estavam no índice certo.
         result = await self.session.execute(
             select(Mission).where(Mission.chapter_id == chapter_id).order_by(Mission.order_index)
         )
@@ -454,12 +443,6 @@ class SQLAlchemyRoadmapRepository:
         if chapter is None:
             return
 
-        # Só apaga missão SEM execução -- se por algum motivo (corrida entre
-        # o usuário completar uma missão e confirmar a proposta) alguma já
-        # tiver sido concluída nesse meio tempo, ela sobrevive em vez de
-        # apagar progresso real do usuário. O restante é reordenado a
-        # seguir pra não deixar buraco no order_index (mesma lógica de
-        # delete_mission).
         result = await self.session.execute(
             select(Mission.id)
             .outerjoin(MissionExecution, MissionExecution.mission_id == Mission.id)
@@ -524,3 +507,30 @@ class SQLAlchemyRoadmapRepository:
         if chapter is not None:
             chapter.is_locked_from_ai = locked
             await self.session.commit()
+
+    async def get_current_pending_mission_title_for_user(self, user_id: int) -> Optional[str]:
+        result = await self.session.execute(
+            select(Roadmap)
+            .join(Goal, Goal.id == Roadmap.goal_id)
+            .where(Goal.user_id == user_id, Roadmap.is_active.is_(True))
+            .options(selectinload(Roadmap.chapters).selectinload(RoadmapChapter.missions))
+            .order_by(Goal.created_at.desc())
+        )
+        roadmaps = list(result.scalars().unique().all())
+        if not roadmaps:
+            return None
+
+        current_chapter = next((c for c in roadmaps[0].chapters if c.status == "in_progress"), None)
+        if current_chapter is None or not current_chapter.missions:
+            return None
+
+        mission_ids = [m.id for m in current_chapter.missions]
+        result = await self.session.execute(
+            select(MissionExecution.mission_id).where(
+                MissionExecution.mission_id.in_(mission_ids), MissionExecution.user_id == user_id
+            )
+        )
+        completed_ids = {row[0] for row in result.all()}
+
+        next_mission = next((m for m in current_chapter.missions if m.id not in completed_ids), None)
+        return next_mission.title if next_mission else None

@@ -66,9 +66,6 @@ class ConfirmAdaptationUseCase:
 
         target_chapter = _find_valid_target_chapter(roadmap, operation)
         if target_chapter is None:
-            # A proposta não pode mais ser aplicada -- descarta em vez de
-            # deixar "presa" pendente pra sempre, e avisa quem chamou (o
-            # endpoint deve devolver um erro real, nunca "sucesso").
             await self.roadmap_repository.clear_pending_adaptation(roadmap.id)
             raise AdaptationOperationNoLongerValidError(
                 "O capítulo dessa proposta mudou de estado (foi concluído ou travado) "
@@ -89,9 +86,6 @@ class ConfirmAdaptationUseCase:
                 missions_data=missions_data,
             )
         else:
-            # Formato de operação desconhecido (não deveria acontecer, já
-            # que só ProposeChapterOperationUseCase escreve esse campo, mas
-            # não silencia isso como "sucesso" se acontecer).
             await self.roadmap_repository.clear_pending_adaptation(roadmap.id)
             raise AdaptationOperationNoLongerValidError(
                 f"Tipo de operação pendente desconhecido: {operation.get('type')!r}."

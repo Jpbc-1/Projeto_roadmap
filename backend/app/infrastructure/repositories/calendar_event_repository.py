@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import CalendarEvent
@@ -78,18 +78,13 @@ class SQLAlchemyCalendarEventRepository:
             await self.session.commit()
 
     async def list_due_reminders(self, now_utc: datetime) -> List[CalendarEvent]:
-        # start_datetime é absoluto (tz-aware) -- comparar com now_utc não
-        # precisa converter fuso nenhum, diferente do Reminder.list_due.
-        # Janela generosa (remind_before_minutes vai até 7 dias) filtrada
-        # fino em Python -- mais simples/portável que aritmética de
-        # intervalo no SQL (sqlite em teste, Postgres em produção).
-        horizon = now_utc + timedelta(days=8)
+        horizon_back = now_utc - timedelta(days=8)
         result = await self.session.execute(
             select(CalendarEvent).where(
                 CalendarEvent.notify_enabled.is_(True),
                 CalendarEvent.remind_before_minutes.is_not(None),
-                CalendarEvent.start_datetime >= now_utc,
-                CalendarEvent.start_datetime <= horizon,
+                CalendarEvent.reminder_dispatched_at.is_(None),
+                CalendarEvent.start_datetime >= horizon_back,
             )
         )
         candidates = result.scalars().all()
@@ -97,6 +92,15 @@ class SQLAlchemyCalendarEventRepository:
         due = []
         for event in candidates:
             fire_at = event.start_datetime - timedelta(minutes=event.remind_before_minutes)
-            if now_utc <= fire_at < now_utc + timedelta(minutes=1):
+            if fire_at <= now_utc:
                 due.append(event)
         return due
+
+    async def try_claim_dispatch(self, event_id: int) -> bool:
+        result = await self.session.execute(
+            update(CalendarEvent)
+            .where(CalendarEvent.id == event_id, CalendarEvent.reminder_dispatched_at.is_(None))
+            .values(reminder_dispatched_at=func.now())
+        )
+        await self.session.commit()
+        return result.rowcount > 0

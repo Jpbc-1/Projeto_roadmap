@@ -41,10 +41,9 @@ class CreateChapterUseCase:
         if roadmap is None or not roadmap.chapters:
             raise RoadmapNotFoundError("Nenhum roadmap ativo para este objetivo ainda.")
 
-        last_chapter = roadmap.chapters[-1]  # relationship já vem ordenada por order_index
+        last_chapter = roadmap.chapters[-1] 
 
-        if after_chapter_id is None:
-            # Sem posição informada: comportamento de sempre, adiciona no final.
+        if after_chapter_id is None: 
             reference_chapter = last_chapter
         else:
             reference_chapter = next((c for c in roadmap.chapters if c.id == after_chapter_id), None)

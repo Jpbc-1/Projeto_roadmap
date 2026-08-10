@@ -5,7 +5,9 @@ from typing import Any, Dict, List, Optional
 from app.application.goals.generate_roadmap import CATEGORY_GUIDANCE
 from app.application.goals.get_goal import GoalAccessDeniedError, GoalNotFoundError
 from app.core.ai.gemini_client import GeminiClient
+from app.core.ai.prompt_safety import PROMPT_INJECTION_GUARD, wrap_user_text
 from app.domain.repositories.goal_repository import GoalRepository
+from app.domain.repositories.recommendation_repository import RecommendationRepository
 from app.domain.repositories.roadmap_repository import RoadmapRepository
 
 IMMEDIATE_SYSTEM_INSTRUCTION = """
@@ -36,7 +38,7 @@ terminologia ou técnica que vale revisar depois) ou uma AÇÃO PRÁTICA/de
 configuração (feita uma vez, não precisa ser "relembrada" -- ex: "instale
 uma ferramenta", "monte seu currículo"). Marque isso no campo booleano
 "is_conceptual" de cada missão.
-"""
+""" + PROMPT_INJECTION_GUARD
 
 
 def _build_immediate_schema(missions_count: int, include_goal_title: bool = False) -> Dict[str, Any]:
@@ -46,8 +48,8 @@ def _build_immediate_schema(missions_count: int, include_goal_title: bool = Fals
     causou o erro 'too many states for serving' na geração de capítulos).
 
     include_goal_title: quando True (capítulo 1 sendo substituído), também
-    exige um novo título pro objetivo -- ver comentário em
-    _generate_immediate_chapter."""
+    exige um novo título pro objetivo E novas recomendações -- ver
+    comentário em _generate_immediate_chapter."""
     properties: Dict[str, Any] = {
         "chapter_title": {"type": "STRING"},
         "missions": {
@@ -71,6 +73,20 @@ def _build_immediate_schema(missions_count: int, include_goal_title: bool = Fals
     if include_goal_title:
         properties["new_goal_title"] = {"type": "STRING"}
         required.append("new_goal_title")
+        properties["recommendations"] = {
+            "type": "ARRAY",
+            "maxItems": 6,
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "name": {"type": "STRING"},
+                    "description": {"type": "STRING"},
+                    "is_paid": {"type": "BOOLEAN"},
+                },
+                "required": ["name", "description", "is_paid"],
+            },
+        }
+        required.append("recommendations")
 
     return {"type": "OBJECT", "properties": properties, "required": required}
 
@@ -109,11 +125,22 @@ Responda SOMENTE em JSON válido, sem texto antes ou depois, neste formato:
     }
   ]
 }
-"""
+""" + PROMPT_INJECTION_GUARD
 
 
 class AdaptationFailedError(Exception):
-    """Levantado quando a IA falha ou devolve algo em formato inválido."""
+    """Levantado quando a IA falha ou devolve algo em formato inválido.
+
+    status_code carrega o HTTP status da falha de origem quando ela veio
+    de uma GeminiAPIError (ex: 503 = sobrecarregado mesmo depois de
+    esgotar toda a cadeia de fallback) -- None quando a causa não tem um
+    status HTTP claro (ex: resposta em formato inesperado). O endpoint usa
+    isso pra devolver 503 (tente de novo already) em vez de um 502 genérico
+    quando faz sentido."""
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
@@ -133,10 +160,12 @@ class AdaptRoadmapUseCase:
         self,
         goal_repository: GoalRepository,
         roadmap_repository: RoadmapRepository,
+        recommendation_repository: RecommendationRepository,
         ai_client: GeminiClient,
     ):
         self.goal_repository = goal_repository
         self.roadmap_repository = roadmap_repository
+        self.recommendation_repository = recommendation_repository
         self.ai_client = ai_client
 
     async def execute(self, goal_id: int, user_id: int, feedback: Optional[str]) -> AdaptationResult:
@@ -157,10 +186,6 @@ class AdaptRoadmapUseCase:
             raise RoadmapNotFoundError("Nenhum roadmap ativo para este objetivo ainda.")
 
         current_chapter = next((c for c in roadmap.chapters if c.status == "in_progress"), None)
-        # Adaptando o capítulo 1 (mesmo que a pessoa não tenha feito nem a
-        # primeira missão ainda) -- dispara duas regras especiais: a missão 1
-        # do novo capítulo também vira "vitória rápida", e o título do
-        # objetivo pode ser regerado (ver _generate_immediate_chapter).
         is_first_chapter = current_chapter is not None and current_chapter.order_index == 0
 
         pending_missions_sorted = []
@@ -225,6 +250,11 @@ class AdaptRoadmapUseCase:
                 if new_title:
                     await self.goal_repository.update(goal.id, title=new_title)
 
+                new_recommendations = immediate_result.get("recommendations")
+                if isinstance(new_recommendations, list) and new_recommendations:
+                    await self.recommendation_repository.delete_by_goal(goal.id)
+                    await self.recommendation_repository.bulk_create(goal.id, new_recommendations[:6])
+
         if safe_locked_ids:
             chapters_to_delete = [c for c in locked_chapters if c.id in safe_locked_ids]
             await self.roadmap_repository.replace_locked_chapters(
@@ -248,7 +278,14 @@ class AdaptRoadmapUseCase:
         return AdaptationResult(chapters_changed=changed_chapters, missions_changed=changed_missions)
 
     async def _filter_safely_deletable(self, locked_chapters) -> List[int]:
-        chapter_ids = [c.id for c in locked_chapters]
+        """Um capítulo só entra na leva que pode ser substituída pela
+        adaptação ampla se: (1) ninguém começou nenhuma missão dele ainda
+        (senão apagaria progresso real), e (2) não está travado contra a IA
+        (is_locked_from_ai) -- a mesma trava que o fluxo de operação
+        específica já respeitava, agora vale pro fluxo amplo também."""
+        chapter_ids = [c.id for c in locked_chapters if not c.is_locked_from_ai]
+        if not chapter_ids:
+            return []
         chapters_with_executions = await self.roadmap_repository.get_chapter_ids_with_executions(chapter_ids)
         return [cid for cid in chapter_ids if cid not in chapters_with_executions]
 
@@ -277,7 +314,11 @@ class AdaptRoadmapUseCase:
                 "mudando logo no início, gere também um novo título curto para "
                 "o OBJETIVO como um todo (campo \"new_goal_title\", até 40 "
                 "caracteres) -- o título antigo foi baseado no pedido original "
-                "e pode não fazer mais sentido."
+                "e pode não fazer mais sentido; (3) gere também novas "
+                "\"recommendations\" (0 a 3 pagas + 0 a 3 gratuitas, mesmos "
+                "critérios de sempre -- sem inventar, sem URL) para o rumo "
+                "NOVO -- as antigas eram do rumo anterior e vão ser trocadas "
+                "por essas."
             )
 
         try:
@@ -287,7 +328,10 @@ class AdaptRoadmapUseCase:
                 response_schema=_build_immediate_schema(pending_count, include_goal_title=is_first_chapter),
             )
         except Exception as exc:  
-            raise AdaptationFailedError(f"Não foi possível gerar o ajuste imediato: {exc}") from exc
+            raise AdaptationFailedError(
+                f"Não foi possível gerar o ajuste imediato: {exc}",
+                status_code=getattr(exc, "status_code", None),
+            ) from exc
 
         if not isinstance(result, dict) or not result.get("chapter_title") or not isinstance(
             result.get("missions"), list
@@ -311,7 +355,10 @@ class AdaptRoadmapUseCase:
                 system_instruction=CHAPTERS_SYSTEM_INSTRUCTION,
             )
         except Exception as exc: 
-            raise AdaptationFailedError(f"Não foi possível gerar os próximos capítulos: {exc}") from exc
+            raise AdaptationFailedError(
+                f"Não foi possível gerar os próximos capítulos: {exc}",
+                status_code=getattr(exc, "status_code", None),
+            ) from exc
 
         if not isinstance(result, dict) or not isinstance(result.get("chapters"), list) or not result["chapters"]:
             raise AdaptationFailedError("Resposta da IA não trouxe 'chapters' válidos.")
@@ -326,7 +373,7 @@ class AdaptRoadmapUseCase:
 
     @staticmethod
     def _build_common_context(goal, reflections: List[Dict[str, Any]], feedback: Optional[str]) -> str:
-        prompt = f"Objetivo original: {goal.context_prompt}"
+        prompt = f"Objetivo original:\n{wrap_user_text(goal.context_prompt)}"
 
         if goal.weekly_active_days is not None:
             prompt += f"\nDias por semana: {goal.weekly_active_days}."
@@ -345,7 +392,7 @@ class AdaptRoadmapUseCase:
                 line = f"\n- \"{item['mission_title']}\""
                 details = []
                 if item.get("reflection"):
-                    details.append(f"reflexão: {item['reflection']}")
+                    details.append(f"reflexão: {wrap_user_text(item['reflection'], 'reflexao')}")
                 if item.get("difficulty_rating"):
                     details.append(f"dificuldade sentida: {item['difficulty_rating']}")
                 if item.get("satisfaction_rating") is not None:
@@ -355,6 +402,6 @@ class AdaptRoadmapUseCase:
                 prompt += line
 
         if feedback:
-            prompt += f"\n\nFeedback direto do usuário agora: \"{feedback}\""
+            prompt += f"\n\nFeedback direto do usuário agora:\n{wrap_user_text(feedback, 'feedback_do_usuario')}"
 
         return prompt

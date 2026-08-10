@@ -1,19 +1,24 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, typography, fonts } from '../theme/colors';
+import { colors, spacing, radius, typography, fonts } from '../theme/colors';
 
 type StudyReminderProps = {
   time: string;
   label: string;
 };
 
-// Neutral surface instead of a colored tint fill — this is a passing
-// note, not something competing for attention.
+// Same flat, no-shadow tier as StreakProgress/MilestoneCard — a light
+// cream strip with a small colored icon badge. Went too quiet as a bare
+// text line on wood (barely noticeable); this brings back enough
+// presence to actually register at a glance without turning into a
+// full saturated banner again.
 export default function StudyReminder({ time, label }: StudyReminderProps) {
   return (
-    <View style={styles.banner}>
-      <Ionicons name="notifications-outline" size={13} color={colors.textOnWoodMuted} />
+    <View style={styles.row}>
+      <View style={styles.iconBadge}>
+        <Ionicons name="notifications" size={14} color={colors.xp} />
+      </View>
       <Text style={styles.text}>
         Hoje às <Text style={styles.time}>{time}</Text> — {label}
       </Text>
@@ -22,20 +27,30 @@ export default function StudyReminder({ time, label }: StudyReminderProps) {
 }
 
 const styles = StyleSheet.create({
-  banner: {
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    marginTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    marginTop: spacing.md,
+  },
+  iconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.sm,
+    backgroundColor: colors.xpTint,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   text: {
     ...typography.caption,
-    fontSize: 11,
-    color: colors.textOnWoodMuted,
+    color: colors.textPrimary,
     flex: 1,
   },
   time: {
     fontFamily: fonts.bodySemiBold,
+    color: colors.xp,
   },
 });

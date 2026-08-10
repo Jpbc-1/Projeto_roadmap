@@ -14,6 +14,7 @@ import asyncio
 import logging
 
 from app.core.config import settings
+from app.core.error_sanitization import safe_error_message
 from app.core.jobs.handlers import JOB_HANDLERS
 from app.infrastructure.database.session import AsyncSessionLocal
 from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
@@ -36,12 +37,9 @@ async def _process_job(job_id: int) -> None:
                 raise ValueError(f"job_type desconhecido: {job.job_type!r}")
             await handler(session, job.payload)
         except Exception as exc:  
-            logger.exception("Job #%s (%s) falhou", job.id, job.job_type)
-            # Descarta qualquer mudança parcial que o handler tenha feito
-            # antes de falhar -- sem isso, a sessão fica "suja" e a próxima
-            # operação (marcar failed/retry) pode quebrar também.
             await session.rollback()
-            await job_repository.mark_failed_or_retry(job.id, error=str(exc))
+            error_message = safe_error_message(exc, f"Job #{job.id} ({job.job_type}) falhou")
+            await job_repository.mark_failed_or_retry(job.id, error=error_message)
             return
 
         await job_repository.mark_completed(job.id)
@@ -63,10 +61,12 @@ async def _poll_loop() -> None:
                 )
 
             if jobs:
-                # Processa o lote em paralelo (cada um com sua própria
-                # sessão dentro de _process_job) -- um lote de N jobs não
-                # espera um terminar pra começar o próximo.
-                await asyncio.gather(*(_process_job(job.id) for job in jobs))
+                results = await asyncio.gather(
+                    *(_process_job(job.id) for job in jobs), return_exceptions=True
+                )
+                for job, result in zip(jobs, results):
+                    if isinstance(result, Exception):
+                        logger.exception("Job #%s: falha fora do tratamento normal", job.id, exc_info=result)
         except asyncio.CancelledError:
             raise
         except Exception:  

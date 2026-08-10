@@ -35,8 +35,6 @@ class UpdateReminderUseCase:
         if existing.user_id != user_id:
             raise ReminderAccessDeniedError()
 
-        # PUT parcial: só monta o dict com o que de fato veio na
-        # requisição -- nunca sobrescreve campo nenhum com None sem querer.
         fields = {}
         if label is not None:
             fields["label"] = label
@@ -57,8 +55,6 @@ class UpdateReminderUseCase:
                 fields["time_of_day"] = notification_defaults.DEFAULT_REMINDER_TIME
                 fields["days_of_week"] = notification_defaults.DEFAULT_REMINDER_DAYS_OF_WEEK
         elif time_of_day is not None or days_of_week:
-            # timing_mode não mudou, mas a pessoa ajustou horário/dias na
-            # mão -- só faz sentido se já estava em 'custom'.
             fields["time_of_day"] = time_of_day if time_of_day is not None else existing.time_of_day
             fields["days_of_week"] = days_of_week if days_of_week else existing.days_of_week
 

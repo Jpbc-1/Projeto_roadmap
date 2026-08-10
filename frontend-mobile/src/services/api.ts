@@ -1,14 +1,18 @@
 import axios from 'axios';
+import { getToken } from './authStorage';
 
-// Quando você for publicar o app, essa URL muda para o seu servidor real.
+const FALLBACK_API_URL = 'http://:8000/api/v1'; // colocar seu ip
+
+export const API_URL = process.env.EXPO_PUBLIC_API_URL?.trim() || FALLBACK_API_URL;
+
+
 export const api = axios.create({
-  baseURL: 'http://192.168.1.10:3000', // IP da sua máquina + Porta do Backend
+  baseURL: API_URL,
   timeout: 10000,
 });
 
-// Interceptor: Se o usuário estiver logado, injeta o token automaticamente em todas as requisições
-api.interceptors.request.use((config) => {
-  const token = "token_salvo_do_usuario"; // Depois usaremos o AsyncStorage ou SecureStore aqui
+api.interceptors.request.use(async (config) => {
+  const token = await getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }

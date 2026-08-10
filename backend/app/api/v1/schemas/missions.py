@@ -1,14 +1,13 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.api.v1.schemas.achievements import AchievementOut
+
 
 class MissionCompleteRequest(BaseModel):
-    user_reflection: Optional[str] = None
-    # Ambos opcionais -- o front decide quando vale a pena perguntar (ex:
-    # nem toda missão precisa pedir dificuldade; satisfação então, cadência
-    # ainda mais espaçada, tipo a cada N missões) pra não cansar o usuário.
+    user_reflection: Optional[str] = Field(None, max_length=2000)
     difficulty_rating: Optional[Literal["too_easy", "just_right", "too_hard"]] = None
     satisfaction_rating: Optional[int] = Field(None, ge=1, le=5)
 
@@ -22,6 +21,10 @@ class MissionExecutionOut(BaseModel):
     ai_feedback: Optional[str]
     difficulty_rating: Optional[str]
     satisfaction_rating: Optional[int]
+    # Campos novos, aditivos (não quebram um client que só lia os de cima):
+    chapter_completed: bool = False
+    goal_completed: bool = False
+    newly_unlocked_achievements: List[AchievementOut] = []
 
     class Config:
         from_attributes = True

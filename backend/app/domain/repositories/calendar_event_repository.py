@@ -34,8 +34,19 @@ class CalendarEventRepository(Protocol):
 
     async def list_due_reminders(self, now_utc: datetime) -> List[CalendarEvent]:
         """Eventos com notify_enabled=True cujo horário de lembrete
-        (start_datetime - remind_before_minutes) cai no minuto de
-        'now_utc'. start_datetime já é tz-aware/absoluto, então isso NÃO
-        precisa de conversão de fuso (diferente de Reminder.list_due).
-        Usado pelo agendador de disparo, não pela tela de calendário."""
+        (start_datetime - remind_before_minutes) já passou e que ainda não
+        foram despachados (reminder_dispatched_at). start_datetime já é
+        tz-aware/absoluto, então isso NÃO precisa de conversão de fuso
+        (diferente de Reminder.list_due). Não depende de janela de tempo
+        nem checkpoint em memória -- "ainda não despachei" cobre ciclo
+        atrasado ou processo reiniciado igual. Usado pelo agendador de
+        disparo, não pela tela de calendário."""
+        ...
+
+    async def try_claim_dispatch(self, event_id: int) -> bool:
+        """Mesmo raciocínio de ReminderRepository.try_claim_dispatch: UPDATE
+        atômico condicional (só marca reminder_dispatched_at se ainda
+        estava None), devolve True só pra quem ganhou a corrida -- é isso
+        que impede múltiplas réplicas da API duplicarem o disparo do mesmo
+        compromisso. Ver docs/adr."""
         ...

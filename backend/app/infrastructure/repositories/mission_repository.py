@@ -123,13 +123,6 @@ class SQLAlchemyMissionRepository:
             stats.max_streak = new_max_streak
             stats.last_activity_date = activity_date
 
-        # Um único commit no final -> ou tudo isso é gravado junto, ou nada é.
-        # Se duas requisições concorrentes (duplo toque, retry de rede)
-        # passaram pelo has_execution() ao mesmo tempo e ambas chegaram
-        # aqui, a constraint única do banco (uq_mission_execution_user)
-        # rejeita a segunda -- é a defesa REAL contra a corrida, o check em
-        # Python lá no use case é só uma otimização pra evitar trabalho à
-        # toa no caminho feliz.
         try:
             await self.session.commit()
         except IntegrityError:

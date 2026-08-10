@@ -25,7 +25,24 @@ class ReminderRepository(Protocol):
     async def delete(self, reminder_id: int) -> None: ...
 
     async def list_due(self, now_utc: datetime) -> List[Reminder]:
-        """Lembretes ativos cujo dia da semana + horário batem com 'now_utc'
-        NO FUSO DO DONO de cada lembrete (não em UTC direto -- ver
-        User.timezone). Usado pelo agendador de disparo, não pela tela."""
+        """Lembretes ativos cujo dia da semana + horário já passaram (no
+        fuso do DONO -- ver User.timezone) e que ainda não dispararam hoje
+        (last_dispatched_date). Não precisa de janela de tempo nem
+        checkpoint em memória: "ainda não disparei hoje" já é
+        naturalmente à prova de ciclo atrasado ou processo reiniciado --
+        cobre desde 1 segundo até vários dias de atraso igual. Usado pelo
+        agendador de disparo, não pela tela."""
+        ...
+
+    async def try_claim_dispatch(self, reminder_id: int) -> bool:
+        """UPDATE atômico condicional: só marca last_dispatched_date=hoje
+        (calculado sozinho, no fuso do dono -- não recebe a data de fora)
+        SE ainda não estava marcado pra hoje, e devolve True só pra quem
+        ganhou a corrida. É isso -- não um lock distribuído nem Redis --
+        que garante que múltiplas réplicas da API rodando o agendador ao
+        mesmo tempo disparem cada lembrete UMA vez, não N vezes: a
+        condição do WHERE só é satisfeita a primeira vez, então mesmo que
+        duas réplicas cheguem aqui quase juntas, só a que COMMITAR
+        primeiro tem linha afetada -- a segunda recebe 0 linhas e desiste
+        (a primeira já cuidou disso). Ver docs/adr."""
         ...

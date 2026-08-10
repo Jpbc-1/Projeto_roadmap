@@ -26,7 +26,7 @@ async def get_due_reviews(
 ):
     repository = SQLAlchemyKnowledgeNodeRepository(db)
     use_case = GetDueReviewsUseCase(repository)
-    items = await use_case.execute(current_user.id)
+    items = await use_case.execute(current_user.id, current_user.timezone)
 
     return [
         DueReviewOut(
@@ -52,7 +52,10 @@ async def answer_review(
     use_case = AnswerReviewUseCase(repository)
 
     try:
-        result = await use_case.execute(node_id=node_id, user_id=current_user.id, difficulty=payload.difficulty)
+        result = await use_case.execute(
+            node_id=node_id, user_id=current_user.id, difficulty=payload.difficulty,
+            user_timezone=current_user.timezone,
+        )
     except (KnowledgeNodeNotFoundError, KnowledgeNodeAccessDeniedError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conceito não encontrado.")
 

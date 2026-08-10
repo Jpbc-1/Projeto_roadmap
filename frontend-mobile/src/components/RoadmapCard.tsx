@@ -7,25 +7,17 @@ type RoadmapCardProps = {
   roadmapTitle: string;
   /** This roadmap's own mission for today */
   todayMission: string;
-  description: string;
   minutes: number;
   /** 0 to 1 — overall progress through the roadmap */
   progress: number;
   onPress?: () => void;
 };
 
-// Plain cards, on purpose — the post-it treatment (color, tilt, pins)
-// belongs to the hero mission alone. A whole list of colorful tilted
-// notes read as a stationery display, not a hierarchy; these just need
-// to be clean and quick to scan.
-export default function RoadmapCard({
-  roadmapTitle,
-  todayMission,
-  description,
-  minutes,
-  progress,
-  onPress,
-}: RoadmapCardProps) {
+// Condensed further: dropped the description line entirely (the hero
+// card already carries a full description — these just need to say
+// "here's the roadmap, here's today's mission, tap for more") and tucked
+// the time onto the same row as the progress bar instead of its own line.
+export default function RoadmapCard({ roadmapTitle, todayMission, minutes, progress, onPress }: RoadmapCardProps) {
   const pct = Math.round(Math.min(Math.max(progress, 0), 1) * 100);
 
   return (
@@ -34,7 +26,7 @@ export default function RoadmapCard({
       onPress={onPress}
       activeOpacity={0.8}
       accessibilityRole="button"
-      accessibilityLabel={`${roadmapTitle}, missão de hoje: ${todayMission}`}
+      accessibilityLabel={`${roadmapTitle}, missão de hoje: ${todayMission}, ${minutes} minutos`}
     >
       <View style={styles.topRow}>
         <Text style={styles.eyebrow} numberOfLines={1}>
@@ -42,15 +34,17 @@ export default function RoadmapCard({
         </Text>
         <Text style={styles.percent}>{pct}%</Text>
       </View>
-      <View style={styles.track}>
-        <View style={[styles.fill, { width: `${pct}%` }]} />
-      </View>
 
-      <Text style={styles.mission}>{todayMission}</Text>
-      <Text style={styles.description} numberOfLines={2}>
-        {description}
+      <Text style={styles.mission} numberOfLines={1}>
+        {todayMission}
       </Text>
-      <Text style={styles.time}>{minutes} min</Text>
+
+      <View style={styles.bottomRow}>
+        <View style={styles.track}>
+          <View style={[styles.fill, { width: `${pct}%` }]} />
+        </View>
+        <Text style={styles.time}>{minutes} min</Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -62,7 +56,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.md,
+    padding: spacing.sm,
     marginTop: spacing.sm,
   },
   topRow: {
@@ -79,31 +73,30 @@ const styles = StyleSheet.create({
   },
   percent: {
     fontFamily: fonts.display,
-    fontSize: 14,
+    fontSize: 13,
     color: colors.success,
   },
+  mission: {
+    ...typography.cardTitle,
+    fontSize: 14,
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+  },
+  bottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   track: {
+    flex: 1,
     height: spacing.sm,
     borderRadius: radius.pill,
     backgroundColor: colors.border,
-    marginBottom: spacing.sm,
   },
   fill: {
     height: spacing.sm,
     borderRadius: radius.pill,
     backgroundColor: colors.success,
-  },
-  mission: {
-    ...typography.cardTitle,
-    fontSize: 15,
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  description: {
-    ...typography.caption,
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
   },
   time: {
     ...typography.caption,

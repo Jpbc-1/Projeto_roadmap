@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import BackgroundJob
@@ -37,19 +37,22 @@ class SQLAlchemyJobRepository:
         now = datetime.now(timezone.utc)
         stale_threshold = now - timedelta(seconds=stale_after_seconds)
 
-        # Jobs que travaram em "processing" (worker morreu no meio) voltam
-        # pra fila -- sem isso, um crash no meio de um job o deixaria preso
-        # "em andamento" pra sempre, invisível pro próximo poll.
         await self.session.execute(
             update(BackgroundJob)
             .where(BackgroundJob.status == "processing", BackgroundJob.locked_at < stale_threshold)
-            .values(status="pending", run_after=now)
+            .values(
+                status=case(
+                    (BackgroundJob.attempts + 1 >= BackgroundJob.max_attempts, "failed"),
+                    else_="pending",
+                ),
+                attempts=BackgroundJob.attempts + 1,
+                run_after=now,
+                locked_at=None,
+                last_error="Job recuperado após ficar preso em 'processing' -- possível crash do worker.",
+            )
         )
         await self.session.commit()
 
-        # FOR UPDATE SKIP LOCKED: seguro mesmo se um dia rodar mais de um
-        # worker/processo ao mesmo tempo -- cada um pega jobs diferentes em
-        # vez de brigar pela mesma linha.
         result = await self.session.execute(
             select(BackgroundJob)
             .where(BackgroundJob.status == "pending", BackgroundJob.run_after <= now)

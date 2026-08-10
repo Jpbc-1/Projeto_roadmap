@@ -17,10 +17,6 @@ class GeminiAPIError(Exception):
         self.status_code = status_code
 
 
-# Cliente HTTP compartilhado entre TODAS as instâncias de GeminiClient do
-# processo, em vez de um httpx.AsyncClient novo (com handshake TCP+TLS do
-# zero) a cada chamada -- httpx.AsyncClient já é seguro pra uso concorrente
-# entre corrotinas (gerencia o próprio pool de conexões internamente).
 _shared_http_client: Optional[httpx.AsyncClient] = None
 
 
@@ -40,8 +36,6 @@ async def close_shared_http_client() -> None:
         _shared_http_client = None
 
 
-# Tipo do callback opcional de telemetria de uso: (nome_do_modelo, dict de
-# usageMetadata cru do Gemini) -> None. Ver app/core/ai/usage_logging.py.
 UsageCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 

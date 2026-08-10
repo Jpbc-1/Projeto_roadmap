@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.endpoints import auth, calendar_events, goals, jobs, missions, reminders, users, knowledge
+from app.api.v1.endpoints import achievements, auth, calendar_events, goals, jobs, missions, reminders, users, knowledge
 from app.core.ai.gemini_client import close_shared_http_client
 from app.core.jobs.reminder_scheduler import start_reminder_scheduler, stop_reminder_scheduler
 from app.core.jobs.worker import start_worker, stop_worker
@@ -20,18 +20,11 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Sobe o worker da fila de tarefas (app/core/jobs/worker.py) junto com a
-    # API -- sem processo/infra separada, ver docstring do worker.
     start_worker()
-    # Agendador de lembretes -- task separada, mesmo motivo (ver docstring
-    # de reminder_scheduler.py). Roda em paralelo ao worker, não em série.
     start_reminder_scheduler()
     yield
     await stop_worker()
     await stop_reminder_scheduler()
-    # Fecha o httpx.AsyncClient compartilhado do GeminiClient (ver
-    # app/core/ai/gemini_client.py) de forma limpa em vez de deixar
-    # conexões soltas quando o processo encerra.
     await close_shared_http_client()
 
 
@@ -50,6 +43,7 @@ app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["knowledg
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(reminders.router, prefix="/api/v1/reminders", tags=["reminders"])
 app.include_router(calendar_events.router, prefix="/api/v1/calendar-events", tags=["calendar-events"])
+app.include_router(achievements.router, prefix="/api/v1/achievements", tags=["achievements"])
 
 
 @app.get("/health", tags=["status"])

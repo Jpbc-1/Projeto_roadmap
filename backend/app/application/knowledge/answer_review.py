@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.application.gamification.streak import calculate_streak_update
 from app.application.knowledge.spaced_repetition import QUALITY_MAP, apply_sm2
@@ -29,12 +30,21 @@ class AnswerReviewUseCase:
     def __init__(self, knowledge_node_repository: KnowledgeNodeRepository):
         self.knowledge_node_repository = knowledge_node_repository
 
-    async def execute(self, node_id: int, user_id: int, difficulty: str) -> AnswerReviewResult:
+    async def execute(self, node_id: int, user_id: int, difficulty: str, user_timezone: str) -> AnswerReviewResult:
         node = await self.knowledge_node_repository.get_by_id(node_id)
         if node is None:
             raise KnowledgeNodeNotFoundError(f"Conceito {node_id} não encontrado.")
         if node.user_id != user_id:
             raise KnowledgeNodeAccessDeniedError("Você não tem acesso a este conceito.")
+
+        # "Hoje" no fuso do usuário, não do servidor -- mesma razão do
+        # streak em complete_mission.py: sem isso, revisão respondida perto
+        # da meia-noite podia contar pro dia errado, ou nunca ficar
+        # "zerada" no dia certo pra ganhar o bônus diário.
+        try:
+            today_for_user = datetime.now(ZoneInfo(user_timezone)).date()
+        except Exception:
+            today_for_user = date.today()
 
         quality = QUALITY_MAP[difficulty]
         new_interval, new_factor, new_repetition_count = apply_sm2(
@@ -52,16 +62,16 @@ class AnswerReviewUseCase:
             old_factor=node.easiness_factor,
             new_factor=new_factor,
             new_repetition_count=new_repetition_count,
-            next_review_date=date.today() + timedelta(days=new_interval),
+            next_review_date=today_for_user + timedelta(days=new_interval),
         )
 
-        remaining = await self.knowledge_node_repository.get_due_for_user(user_id, date.today())
+        remaining = await self.knowledge_node_repository.get_due_for_user(user_id, today_for_user)
         remaining_count = len(remaining)
 
         daily_bonus_awarded = False
         xp_earned = 0
         if remaining_count == 0:
-            await self._award_daily_bonus(user_id)
+            await self._award_daily_bonus(user_id, today_for_user)
             daily_bonus_awarded = True
             xp_earned = DAILY_REVIEW_BONUS_XP
 
@@ -72,9 +82,9 @@ class AnswerReviewUseCase:
             xp_earned=xp_earned,
         )
 
-    async def _award_daily_bonus(self, user_id: int) -> None:
+    async def _award_daily_bonus(self, user_id: int, today_for_user: date) -> None:
         stats = await self.knowledge_node_repository.get_user_stats(user_id)
-        update = calculate_streak_update(stats, xp_to_add=DAILY_REVIEW_BONUS_XP, today=date.today())
+        update = calculate_streak_update(stats, xp_to_add=DAILY_REVIEW_BONUS_XP, today=today_for_user)
 
         await self.knowledge_node_repository.apply_daily_review_bonus(
             user_id=user_id,
