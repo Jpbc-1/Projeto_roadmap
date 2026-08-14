@@ -54,6 +54,7 @@ class User(Base):
     goals: Mapped[list["Goal"]] = relationship(back_populates="user")
     stats: Mapped[Optional["UserStats"]] = relationship(back_populates="user", uselist=False)
     achievements: Mapped[list["UserAchievement"]] = relationship(back_populates="user")
+    push_tokens: Mapped[list["UserPushToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Goal(Base):
@@ -183,7 +184,7 @@ class Achievement(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    required_condition: Mapped[str] = mapped_column(String(100))  # ex: "7_day_streak"
+    required_condition: Mapped[str] = mapped_column(String(100)) 
     icon_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     unlocked_by: Mapped[list["UserAchievement"]] = relationship(back_populates="achievement")
@@ -316,9 +317,9 @@ class OAuthAccount(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(20))  # "google" | "facebook"
+    provider: Mapped[str] = mapped_column(String(20))  
     provider_user_id: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(255))  # e-mail no momento do vínculo, informativo
+    email: Mapped[str] = mapped_column(String(255))  
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -352,7 +353,7 @@ class Reminder(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     label: Mapped[str] = mapped_column(String(120))
     time_of_day: Mapped[time] = mapped_column(Time)
-    days_of_week: Mapped[list] = mapped_column(JSON)  # ex: [0,1,2,3,4,5,6], 0=domingo
+    days_of_week: Mapped[list] = mapped_column(JSON)  
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_dispatched_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notification_timing_mode: Mapped[str] = mapped_column(String(20), default="app_default")
@@ -390,3 +391,36 @@ class CalendarEvent(Base):
     custom_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reminder_dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserPushToken(Base):
+    """Device token (Expo push token) de um aparelho de um usuário -- é
+    pra ONDE o handler de disparo (core/jobs/handlers.py, _send_push)
+    manda a notificação de verdade (Reminder/CalendarEvent só decidem
+    QUANDO e O QUÊ, ver domain/services/notification_content.py; esta
+    tabela decide PRA ONDE).
+
+    Uma linha por APARELHO, não por usuário: uma pessoa pode ter vários
+    (celular + tablet, por exemplo) -- todos recebem a notificação.
+
+    push_token é unique (não (user_id, push_token)) de propósito: o
+    mesmo token físico nunca deveria existir em duas linhas, e isso é o
+    que permite o UPSERT do registro (app/application/notifications/
+    register_push_token.py) ser "achar por token", não por combinação
+    user+token -- resolve token igual chegando de outra conta (troca de
+    usuário no mesmo aparelho) sem duplicar nem exigir lógica extra no
+    app cliente.
+    """
+
+    __tablename__ = "user_push_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    push_token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    platform: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship(back_populates="push_tokens")
