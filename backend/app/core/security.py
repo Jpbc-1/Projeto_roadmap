@@ -8,6 +8,8 @@ from app.core.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+DUMMY_HASH = pwd_context.hash("vascomaiorqueflamengo")
+
 
 def hash_password(password: str) -> str:
     """Transforma a senha em texto puro em um hash bcrypt (nunca guardamos senha crua)."""
@@ -18,6 +20,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Compara a senha digitada no login com o hash salvo no banco."""
     return pwd_context.verify(plain_password, hashed_password)
 
+def verify_dummy_hash():
+    """Verifica se o hash dummy é válido (para evitar ataques de timing)."""
+    return pwd_context.verify("vascomaiorqueflamengo", DUMMY_HASH)
 
 def create_access_token(subject: str, expires_delta: Optional[timedelta] = None) -> str:
     """Gera um JWT contendo o e-mail do usuário (subject) e uma data de expiração."""
