@@ -184,7 +184,7 @@ class Achievement(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    required_condition: Mapped[str] = mapped_column(String(100)) 
+    required_condition: Mapped[str] = mapped_column(String(100))  
     icon_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     unlocked_by: Mapped[list["UserAchievement"]] = relationship(back_populates="achievement")
@@ -317,9 +317,9 @@ class OAuthAccount(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(20))  
+    provider: Mapped[str] = mapped_column(String(20)) 
     provider_user_id: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(255))  
+    email: Mapped[str] = mapped_column(String(255)) 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

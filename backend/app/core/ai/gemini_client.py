@@ -70,8 +70,6 @@ class GeminiClient:
     ):
         self.api_key = api_key
         self.model = model
-        # Filtra duplicata e repetição do modelo principal -- não faz
-        # sentido "cair" pra um modelo igual ao que acabou de falhar.
         seen = {model}
         self.fallback_models: List[str] = []
         for candidate in fallback_models or []:
@@ -99,9 +97,9 @@ class GeminiClient:
                 is_last_attempt = index == len(models_to_try) - 1
                 if exc.status_code != 503 or is_last_attempt:
                     raise
-                # 503 e ainda sobra fallback na fila -> tenta o próximo.
+                
 
-        raise last_error  # defensivo -- o loop acima sempre retorna ou levanta antes de chegar aqui
+        raise last_error  
 
     async def _request_json(
         self,

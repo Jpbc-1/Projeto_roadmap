@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/roadmap_ai"
 
+
     DB_POOL_RECYCLE_SECONDS: int = 1800
 
     SECRET_KEY: str
@@ -29,19 +30,17 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
 
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
-    GEMINI_PRO_MODEL: str = "gemini-3.6-flash"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"#gemini-3.6-flash
+    GEMINI_PRO_MODEL: str = "gemini-3.7-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.1-flash-lite"
     AUTO_ADAPT_EVERY_N_CHAPTERS: int = 2
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
 
-    
     JOB_POLL_INTERVAL_SECONDS: float = 2.0
     JOB_BATCH_SIZE: int = 5
     JOB_MAX_ATTEMPTS: int = 3
     JOB_STALE_AFTER_SECONDS: int = 600
 
-   
     REMINDER_SCHEDULER_INTERVAL_SECONDS: float = 60.0
 
     CREDITS_FREE_PLAN_STARTING: int = 500
@@ -51,6 +50,17 @@ class Settings(BaseSettings):
     LOGIN_RATE_LIMIT_PER_EMAIL: int = 5
     LOGIN_RATE_LIMIT_PER_IP: int = 20
     LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 900
+
+    REGISTER_RATE_LIMIT_PER_IP: int = 5
+    REGISTER_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+
+
+    # só é seguro atrás de um proxy que você tem
+    # certeza que sobrescreve X-Forwarded-For a cada requisição.
+    TRUST_PROXY_HEADERS: bool = False
+
+    DEFAULT_PAGE_SIZE: int = 50
+    MAX_PAGE_SIZE: int = 100
 
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     FACEBOOK_APP_ID: str = ""

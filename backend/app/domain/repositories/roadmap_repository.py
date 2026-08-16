@@ -196,3 +196,15 @@ class RoadmapRepository(Protocol):
         missão pendente, devolve None (quem chama cai pro texto padrão do
         lembrete)."""
         ...
+
+    async def delete_roadmap(self, roadmap_id: int) -> None:
+        """Apaga o roadmap inteiro: mission_executions, missions,
+        roadmap_chapters e o roadmap em si, nessa ordem (filhos antes de
+        pais, sem depender de cascade do banco -- ver implementação
+        SQLAlchemy). Não apaga nada em KnowledgeNode/KnowledgeReview: esses
+        são ligados ao Goal (goal_id), não ao Roadmap, então sobrevivem de
+        propósito -- o conhecimento adquirido não devia sumir só porque o
+        plano foi refeito/apagado. Quem chama (DeleteRoadmapUseCase) é
+        responsável por já ter confirmado que o roadmap pertence ao
+        usuário certo -- este método não valida isso de novo."""
+        ...

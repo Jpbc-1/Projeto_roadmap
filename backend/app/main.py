@@ -20,6 +20,7 @@ from app.api.v1.endpoints import (
 )
 from app.core.ai.gemini_client import close_shared_http_client
 from app.core.notifications.expo_push_client import close_shared_http_client as close_shared_expo_http_client
+from app.core.error_sanitization import safe_error_message
 from app.core.jobs.reminder_scheduler import start_reminder_scheduler, stop_reminder_scheduler
 from app.core.jobs.worker import start_worker, stop_worker
 from app.infrastructure.database.session import get_db_session
@@ -28,6 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -74,6 +76,11 @@ async def health_check_db(db: AsyncSession = Depends(get_db_session)):
     try:
         await db.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
-        return {"status": "error", "database": "unreachable", "detail": str(exc)}
+        logger.error("Health check do banco falhou", exc_info=exc)
+        return {
+            "status": "error",
+            "database": "unreachable",
+            "detail": safe_error_message(exc, "Falha ao conectar com o banco de dados"),
+        }
     return {"status": "ok", "database": "connected"}
 

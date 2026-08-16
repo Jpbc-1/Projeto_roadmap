@@ -4,6 +4,8 @@ venv/
 env/
 .expo/
 node_modules/
+/android
+/ios
 
 # Python
 __pycache__/

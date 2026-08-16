@@ -44,6 +44,7 @@ async def handle_intake_goal(session: AsyncSession, payload: Dict[str, Any]) -> 
     job_repository = SQLAlchemyJobRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
 
+
     moderation_ai_client = GeminiClient(
         api_key=settings.GEMINI_API_KEY,
         model=settings.GEMINI_FALLBACK_MODEL,
@@ -198,7 +199,7 @@ async def handle_send_reminder_notification(session: AsyncSession, payload: Dict
         roadmap_repository = SQLAlchemyRoadmapRepository(session)
         reminder = await reminder_repository.get_by_id(source_id)
         if reminder is None or not reminder.is_active:
-            return 
+            return  
         pending_mission_title = None
         if reminder.notification_style == "app_generated":
             pending_mission_title = await roadmap_repository.get_current_pending_mission_title_for_user(
@@ -266,6 +267,7 @@ async def _send_push(session: AsyncSession, user_id: int, title: str, body: str)
 
         if dead_tokens:
             await token_repository.delete_by_tokens(dead_tokens)
+
 
 
 JOB_HANDLERS = {

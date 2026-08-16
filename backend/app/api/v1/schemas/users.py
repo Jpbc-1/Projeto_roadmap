@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class GamificationProfileOut(BaseModel):
@@ -13,3 +13,7 @@ class GamificationProfileOut(BaseModel):
     current_streak: int
     max_streak: int
     last_activity_date: Optional[date]
+
+
+class DeleteAccountRequest(BaseModel):
+    password: Optional[str] = Field(None, max_length=72)

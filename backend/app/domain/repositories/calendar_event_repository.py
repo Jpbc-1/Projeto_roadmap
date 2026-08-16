@@ -20,10 +20,14 @@ class CalendarEventRepository(Protocol):
         custom_message: Optional[str] = None,
     ) -> CalendarEvent: ...
 
-    async def list_by_range(self, user_id: int, start: datetime, end: datetime) -> List[CalendarEvent]:
+    async def list_by_range(
+        self, user_id: int, start: datetime, end: datetime, limit: int, offset: int
+    ) -> List[CalendarEvent]:
         """Lista compromissos cujo início cai dentro do intervalo -- é o
         que alimenta a visão de calendário (mês/semana) na tela de
-        Rotina."""
+        Rotina. limit/offset são uma segunda camada de proteção além do
+        range de datas: nada impede o cliente de pedir um intervalo de
+        anos de uma vez."""
         ...
 
     async def get_by_id(self, event_id: int) -> Optional[CalendarEvent]: ...

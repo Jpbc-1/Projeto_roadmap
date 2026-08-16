@@ -4,6 +4,7 @@ import httpx
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
+
 EXPO_MAX_MESSAGES_PER_REQUEST = 100
 
 

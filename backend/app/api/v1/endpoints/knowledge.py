@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import PaginationParams, get_current_user
 from app.api.v1.schemas.knowledge import AnswerReviewRequest, DueReviewOut, ReviewResultOut
 from app.application.knowledge.answer_review import (
     AnswerReviewUseCase,
@@ -23,10 +23,13 @@ router = APIRouter()
 async def get_due_reviews(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
+    pagination: PaginationParams = Depends(PaginationParams),
 ):
     repository = SQLAlchemyKnowledgeNodeRepository(db)
     use_case = GetDueReviewsUseCase(repository)
-    items = await use_case.execute(current_user.id, current_user.timezone)
+    items = await use_case.execute(
+        current_user.id, current_user.timezone, limit=pagination.limit, offset=pagination.offset
+    )
 
     return [
         DueReviewOut(

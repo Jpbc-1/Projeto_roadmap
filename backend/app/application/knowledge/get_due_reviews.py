@@ -8,7 +8,9 @@ class GetDueReviewsUseCase:
     def __init__(self, knowledge_node_repository: KnowledgeNodeRepository):
         self.knowledge_node_repository = knowledge_node_repository
 
-    async def execute(self, user_id: int, user_timezone: str) -> List[Tuple[KnowledgeNode, Optional[str]]]:
+    async def execute(
+        self, user_id: int, user_timezone: str, limit: int, offset: int
+    ) -> List[Tuple[KnowledgeNode, Optional[str]]]:
         from datetime import date, datetime
         from zoneinfo import ZoneInfo
 
@@ -17,4 +19,6 @@ class GetDueReviewsUseCase:
         except Exception:
             today_for_user = date.today()
 
-        return await self.knowledge_node_repository.get_due_for_user(user_id, today_for_user)
+        return await self.knowledge_node_repository.get_due_for_user(
+            user_id, today_for_user, limit=limit, offset=offset
+        )

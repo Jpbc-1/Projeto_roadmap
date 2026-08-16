@@ -36,9 +36,13 @@ class SQLAlchemyGoalRepository:
         await self.session.refresh(goal)
         return goal
 
-    async def list_by_user(self, user_id: int) -> List[Goal]:
+    async def list_by_user(self, user_id: int, limit: int, offset: int) -> List[Goal]:
         result = await self.session.execute(
-            select(Goal).where(Goal.user_id == user_id).order_by(Goal.created_at.desc())
+            select(Goal)
+            .where(Goal.user_id == user_id)
+            .order_by(Goal.created_at.desc(), Goal.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars().all())
 
