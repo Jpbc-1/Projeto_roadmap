@@ -4,7 +4,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import PaginationParams, get_current_user
 from app.api.v1.schemas.calendar_events import (
     CalendarEventCreate,
     CalendarEventOut,
@@ -63,13 +63,16 @@ async def list_calendar_events(
     end: datetime = Query(..., description="Fim do intervalo, ISO 8601"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
+    pagination: PaginationParams = Depends(PaginationParams),
 ):
     """É este endpoint que o botão 'abrir calendário' do app chama -- o
     front manda o intervalo visível (semana/mês na tela) e recebe só os
-    compromissos daquela janela."""
+    compromissos daquela janela. limit/offset existem como uma segunda
+    trava além do range de datas: nada impede alguém de pedir start/end
+    cobrindo décadas numa perna só."""
     repository = SQLAlchemyCalendarEventRepository(db)
     use_case = ListCalendarEventsUseCase(repository)
-    return await use_case.execute(current_user.id, start, end)
+    return await use_case.execute(current_user.id, start, end, limit=pagination.limit, offset=pagination.offset)
 
 
 @router.get("/{event_id}", response_model=CalendarEventOut)

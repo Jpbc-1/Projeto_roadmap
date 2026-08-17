@@ -63,10 +63,12 @@ class SQLAlchemyAchievementRepository:
         result = await self.session.execute(select(Achievement).order_by(Achievement.id))
         return list(result.scalars().all())
 
-    async def list_unlocked_for_user(self, user_id: int) -> List[UserAchievement]:
+    async def list_unlocked_for_user(self, user_id: int, limit: int, offset: int) -> List[UserAchievement]:
         result = await self.session.execute(
             select(UserAchievement)
             .where(UserAchievement.user_id == user_id)
-            .order_by(UserAchievement.unlocked_at.desc())
+            .order_by(UserAchievement.unlocked_at.desc(), UserAchievement.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars().all())

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from app.application.knowledge.embedding_utils import find_duplicate_node
 from app.core.ai.gemini_client import GeminiClient
+from app.core.ai.prompt_safety import PROMPT_INJECTION_GUARD, wrap_user_text
 from app.domain.repositories.goal_repository import GoalRepository
 from app.domain.repositories.knowledge_node_repository import KnowledgeNodeRepository
 from app.domain.repositories.roadmap_repository import RoadmapRepository
@@ -34,7 +35,7 @@ Se NENHUMA missão do capítulo for conceitual, devolva uma lista vazia --
 não force conceitos que não existem só para preencher.
 
 Responda SOMENTE em JSON: {"concepts": ["conceito 1", "conceito 2"]}
-"""
+""" + PROMPT_INJECTION_GUARD
 
 EXTRACTION_SCHEMA = {
     "type": "OBJECT",
@@ -139,7 +140,7 @@ class ExtractKnowledgeNodesUseCase:
         return created_count
 
     async def _extract_concepts(self, goal, missions) -> List[str]:
-        prompt = f"Objetivo: {goal.context_prompt}\n\nMissões concluídas neste capítulo:"
+        prompt = f"Objetivo: {wrap_user_text(goal.context_prompt)}\n\nMissões concluídas neste capítulo:"
         for mission in missions:
             description = mission.description or "(sem descrição)"
             prompt += f"\n- \"{mission.title}\": {description}"

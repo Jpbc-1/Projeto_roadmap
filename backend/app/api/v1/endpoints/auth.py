@@ -16,7 +16,7 @@ from app.application.auth.register_user import (
 from app.core.config import settings
 from app.core.oauth.facebook import FacebookTokenVerificationError, verify_facebook_access_token
 from app.core.oauth.google import GoogleTokenVerificationError, verify_google_id_token
-from app.core.rate_limiter import login_rate_limiter
+from app.core.rate_limiter import get_client_ip, login_rate_limiter, register_rate_limiter
 from app.core.security import create_access_token
 from app.infrastructure.database.session import get_db_session
 from app.infrastructure.repositories.oauth_account_repository import SQLAlchemyOAuthAccountRepository
@@ -26,7 +26,18 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(payload: UserCreate, db: AsyncSession = Depends(get_db_session)):
+async def register(payload: UserCreate, request: Request, db: AsyncSession = Depends(get_db_session)):
+    ip_key = f"register:ip:{get_client_ip(request)}"
+    ip_ok, ip_retry = await register_rate_limiter.check(
+        ip_key, settings.REGISTER_RATE_LIMIT_PER_IP, settings.REGISTER_RATE_LIMIT_WINDOW_SECONDS
+    )
+    if not ip_ok:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas contas criadas a partir deste endereço. Tente novamente mais tarde.",
+            headers={"Retry-After": str(ip_retry)},
+        )
+
     repository = SQLAlchemyUserRepository(db)
     use_case = RegisterUserUseCase(repository)
 
@@ -46,7 +57,7 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db_session),
 ):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     email_key = f"login:email:{form_data.username.strip().lower()}"
     ip_key = f"login:ip:{client_ip}"
 

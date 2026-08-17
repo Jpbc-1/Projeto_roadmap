@@ -37,10 +37,6 @@ class AnswerReviewUseCase:
         if node.user_id != user_id:
             raise KnowledgeNodeAccessDeniedError("Você não tem acesso a este conceito.")
 
-        # "Hoje" no fuso do usuário, não do servidor -- mesma razão do
-        # streak em complete_mission.py: sem isso, revisão respondida perto
-        # da meia-noite podia contar pro dia errado, ou nunca ficar
-        # "zerada" no dia certo pra ganhar o bônus diário.
         try:
             today_for_user = datetime.now(ZoneInfo(user_timezone)).date()
         except Exception:
@@ -65,8 +61,7 @@ class AnswerReviewUseCase:
             next_review_date=today_for_user + timedelta(days=new_interval),
         )
 
-        remaining = await self.knowledge_node_repository.get_due_for_user(user_id, today_for_user)
-        remaining_count = len(remaining)
+        remaining_count = await self.knowledge_node_repository.count_due_for_user(user_id, today_for_user)
 
         daily_bonus_awarded = False
         xp_earned = 0

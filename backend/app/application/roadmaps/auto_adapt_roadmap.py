@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from app.application.roadmaps.adapt_roadmap import AdaptationResult, AdaptRoadmapUseCase
 from app.core.ai.gemini_client import GeminiClient
+from app.core.ai.prompt_safety import PROMPT_INJECTION_GUARD, wrap_user_text
 from app.domain.repositories.roadmap_repository import RoadmapRepository
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ Não adapte por qualquer motivo pequeno -- só quando o sinal for real.
 
 Responda SOMENTE em JSON, neste formato:
 {"needs_adaptation": true ou false, "direction": "accelerate" ou "slow_down" ou "none", "reason": "explicação curta"}
-"""
+""" + PROMPT_INJECTION_GUARD
 
 TRIAGE_SCHEMA = {
     "type": "OBJECT",
@@ -110,7 +111,7 @@ class AutoAdaptRoadmapUseCase:
             line = f"- \"{item['mission_title']}\""
             details = []
             if item.get("reflection"):
-                details.append(f"reflexão: {item['reflection']}")
+                details.append(f"reflexão: {wrap_user_text(item['reflection'])}")
             if item.get("difficulty_rating"):
                 details.append(f"dificuldade: {item['difficulty_rating']}")
             if item.get("satisfaction_rating") is not None:

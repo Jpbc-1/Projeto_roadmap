@@ -59,11 +59,6 @@ class CreateChapterUseCase:
                 "do capítulo atual (em andamento) ou de um dos capítulos futuros."
             )
 
-        # Só desbloqueia na hora se estiver entrando no fim de um roadmap já
-        # todo concluído (mesma regra que o "adicionar no final" original já
-        # seguia). Em qualquer outra posição o capítulo entra "locked" e é
-        # desbloqueado sozinho no momento certo -- o order_index já cuida
-        # disso via complete_chapter_and_unlock_next.
         new_status = "in_progress" if (is_end_of_roadmap and reference_chapter.status == "completed") else "locked"
 
         await self.roadmap_repository.insert_chapter_after(

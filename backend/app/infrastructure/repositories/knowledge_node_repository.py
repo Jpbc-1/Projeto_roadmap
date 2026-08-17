@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import Goal, KnowledgeNode, KnowledgeReview, UserStats
@@ -37,14 +37,35 @@ class SQLAlchemyKnowledgeNodeRepository:
         await self.session.refresh(node)
         return node
 
-    async def get_due_for_user(self, user_id: int, today: date) -> List[Tuple[KnowledgeNode, Optional[str]]]:
+    async def get_due_for_user(
+        self, user_id: int, today: date, limit: int, offset: int
+    ) -> List[Tuple[KnowledgeNode, Optional[str]]]:
         result = await self.session.execute(
             select(KnowledgeNode, Goal.title)
             .join(Goal, Goal.id == KnowledgeNode.goal_id)
             .where(KnowledgeNode.user_id == user_id, KnowledgeNode.next_review_date <= today)
-            .order_by(KnowledgeNode.next_review_date)
+            .order_by(KnowledgeNode.next_review_date, KnowledgeNode.id)
+            .limit(limit)
+            .offset(offset)
         )
         return [(row[0], row[1]) for row in result.all()]
+
+    async def count_due_for_user(self, user_id: int, today: date) -> int:
+        """COUNT dedicado, não "pega tudo e mede len()" -- usado por
+        answer_review.py só pra saber SE ainda sobra alguma revisão hoje
+        (decide o bônus diário), não pra listar. Importante ser um método
+        separado de get_due_for_user: aquele agora tem limit/offset com
+        teto (ver PaginationParams), então usar ele + len() pra contar
+        daria um número errado (nunca "zero" de verdade) pra quem tiver
+        mais pendências que o teto de página -- COUNT no banco não tem
+        esse problema e de quebra é mais barato que carregar as linhas
+        todas só pra descartar o conteúdo e ficar com o tamanho."""
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(KnowledgeNode)
+            .where(KnowledgeNode.user_id == user_id, KnowledgeNode.next_review_date <= today)
+        )
+        return result.scalar_one()
 
     async def get_by_id(self, node_id: int) -> Optional[KnowledgeNode]:
         result = await self.session.execute(select(KnowledgeNode).where(KnowledgeNode.id == node_id))

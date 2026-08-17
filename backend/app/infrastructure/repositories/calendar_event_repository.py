@@ -43,7 +43,9 @@ class SQLAlchemyCalendarEventRepository:
         await self.session.refresh(event)
         return event
 
-    async def list_by_range(self, user_id: int, start: datetime, end: datetime) -> List[CalendarEvent]:
+    async def list_by_range(
+        self, user_id: int, start: datetime, end: datetime, limit: int, offset: int
+    ) -> List[CalendarEvent]:
         result = await self.session.execute(
             select(CalendarEvent)
             .where(
@@ -51,7 +53,9 @@ class SQLAlchemyCalendarEventRepository:
                 CalendarEvent.start_datetime >= start,
                 CalendarEvent.start_datetime <= end,
             )
-            .order_by(CalendarEvent.start_datetime)
+            .order_by(CalendarEvent.start_datetime, CalendarEvent.id)
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars().all())
 
