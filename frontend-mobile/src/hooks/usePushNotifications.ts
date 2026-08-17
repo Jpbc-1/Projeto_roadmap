@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
 import { notificationService } from '../services/notificationService';
 import { api } from '../services/api';
+import { Platform } from 'react-native';
 
 // ========== AVISO ==========
 // O uso de console.log aqui é estritamente
@@ -19,7 +20,8 @@ export function usePushNotifications(isAuthenticated: boolean) {
                 try {
                     // Assume que esse endpoint existe no backend
                     await api.post('/notifications/register-token', {
-                        pushToken: token
+                        push_token: token,
+                        platform: Platform.OS
                     });
                 } catch (error) {
                     console.error('Falha ao enviar token para api.', error);

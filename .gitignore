@@ -6,6 +6,7 @@ env/
 node_modules/
 /android
 /ios
+google-services.json
 
 # Python
 __pycache__/
