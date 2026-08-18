@@ -40,3 +40,22 @@ def decode_access_token(token: str) -> Optional[str]:
         return payload.get("sub")
     except JWTError:
         return None
+
+def create_email_verification_token(email: str) -> str:
+    """Gera um token JWT válido por 24 horas para verificação de e-mail."""
+    expire = datetime.now(timezone.utc) + timedelta(hours=24)
+    to_encode = {"exp": expire, "sub": email, "type": "email_verification"}
+    
+    # Usa a mesma SECRET_KEY e algoritmo do sistema de login
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return encoded_jwt
+
+def verify_email_token(token: str) -> Optional[str]:
+    """Decodifica o token e retorna o e-mail se for válido."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "email_verification":
+            return None
+        return payload.get("sub")
+    except JWTError:
+        return None    

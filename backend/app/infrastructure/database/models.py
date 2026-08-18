@@ -16,6 +16,7 @@ prematura para o estágio atual do projeto.
 
 from datetime import date, datetime, time
 from typing import Optional
+from sqlalchemy import Column, Boolean
 
 from sqlalchemy import (
     Boolean,
@@ -54,6 +55,8 @@ class User(Base):
     goals: Mapped[list["Goal"]] = relationship(back_populates="user")
     stats: Mapped[Optional["UserStats"]] = relationship(back_populates="user", uselist=False)
     achievements: Mapped[list["UserAchievement"]] = relationship(back_populates="user")
+
+    email_verified = Column(Boolean, default=False, server_default="false", nullable=False)
 
 
 class Goal(Base):

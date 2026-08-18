@@ -3,6 +3,8 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.goals.create_goal import EmailNotVerifiedError
+
 from app.api.v1.dependencies import get_current_user
 from app.api.v1.schemas.goals import (
     GoalAnswersRequest,
@@ -69,12 +71,31 @@ async def create_goal(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
+    repository = SQLAlchemyGoalRepository(db)
+    job_repository = SQLAlchemyJobRepository(db)
+    use_case = CreateGoalUseCase(repository)
     user_repository = SQLAlchemyUserRepository(db)
+
+    try:
+        goal = await use_case.execute(
+            user_id=current_user.id,
+            is_email_verified=current_user.email_verified, # <-- O parâmetro novo aqui
+            context_prompt=payload.context_prompt,
+            target_date=payload.target_date,
+            weekly_active_days=payload.weekly_active_days,
+            daily_time_minutes=payload.daily_time_minutes,
+            prior_knowledge_level=payload.prior_knowledge_level,
+        )
+    except EmailNotVerifiedError as e:
+        # Se o e-mail não for verificado, devolvemos 403 e a execução para aqui!
+        raise HTTPException(status_code=403, detail=str(e))
 
     charged = await user_repository.try_deduct_credits(
         current_user.id, settings.CREDITS_COST_GENERATE_ROADMAP
     )
     if not charged:
+        # Se falhou a cobrança, apagamos o objetivo que tínhamos acabado de criar e damos erro.
+        await repository.delete(goal.id) 
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail=(
@@ -82,19 +103,6 @@ async def create_goal(
                 "para criar um novo objetivo."
             ),
         )
-
-    repository = SQLAlchemyGoalRepository(db)
-    job_repository = SQLAlchemyJobRepository(db)
-    use_case = CreateGoalUseCase(repository)
-
-    goal = await use_case.execute(
-        user_id=current_user.id,
-        context_prompt=payload.context_prompt,
-        target_date=payload.target_date,
-        weekly_active_days=payload.weekly_active_days,
-        daily_time_minutes=payload.daily_time_minutes,
-        prior_knowledge_level=payload.prior_knowledge_level,
-    )
 
     await job_repository.enqueue("intake_goal", {"goal_id": goal.id}, user_id=current_user.id)
 
