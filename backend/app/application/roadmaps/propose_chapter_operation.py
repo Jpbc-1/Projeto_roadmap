@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from app.application.goals.get_goal import GoalAccessDeniedError, GoalNotFoundError
 from app.application.roadmaps.get_roadmap import RoadmapNotFoundError
 from app.core.ai.gemini_client import GeminiClient
+from app.core.ai.prompt_safety import PROMPT_INJECTION_GUARD, wrap_user_text
 from app.domain.repositories.goal_repository import GoalRepository
 from app.domain.repositories.roadmap_repository import RoadmapRepository
 
@@ -48,7 +49,7 @@ Regras importantes, sem exceção:
 - Se "scope" for "broad", NÃO preencha "operation" (omita ou deixe null).
 
 Responda SOMENTE em JSON no formato do schema fornecido.
-"""
+""" + PROMPT_INJECTION_GUARD
 
 CHAPTER_OPERATION_SCHEMA = {
     "type": "OBJECT",
@@ -95,7 +96,7 @@ class NoActionableFeedbackError(Exception):
 
 @dataclass
 class ChapterOperationResult:
-    scope: str 
+    scope: str  
     operation: Optional[Dict[str, Any]] = None
     roadmap_id: Optional[int] = None
 
@@ -144,7 +145,7 @@ class ProposeChapterOperationUseCase:
             for chapter in roadmap.chapters
         ]
         prompt = (
-            f"Feedback do usuário: \"{feedback.strip()}\"\n\n"
+            f"Feedback do usuário: {wrap_user_text(feedback.strip())}\n\n"
             f"Capítulos existentes neste roadmap:\n{json.dumps(chapters_context, ensure_ascii=False, indent=2)}"
         )
 

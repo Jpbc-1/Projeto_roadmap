@@ -366,7 +366,7 @@ class AdaptRoadmapUseCase:
             if not isinstance(chapter, dict) or not chapter.get("title") or not chapter.get("missions"):
                 raise AdaptationFailedError("Um capítulo da resposta da IA está mal formado.")
 
-        chapters_data = result["chapters"][:6]  # trava de segurança
+        chapters_data = result["chapters"][:6]  
         for chapter in chapters_data:
             chapter["missions"] = chapter.get("missions", [])[:10]
         return chapters_data

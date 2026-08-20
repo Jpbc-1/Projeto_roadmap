@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 from typing import List, Optional, Protocol, Tuple
 
 from app.infrastructure.database.models import KnowledgeNode
@@ -19,9 +19,18 @@ class KnowledgeNodeRepository(Protocol):
         next_review_date: date,
     ) -> KnowledgeNode: ...
 
-    async def get_due_for_user(self, user_id: int, today: date) -> List[Tuple[KnowledgeNode, Optional[str]]]:
+    async def get_due_for_user(
+        self, user_id: int, today: date, limit: int, offset: int
+    ) -> List[Tuple[KnowledgeNode, Optional[str]]]:
         """Nós com revisão pendente (next_review_date <= today), já com o
         título do goal correspondente (evita N+1 no endpoint)."""
+        ...
+
+    async def count_due_for_user(self, user_id: int, today: date) -> int:
+        """Quantos nós têm revisão pendente -- COUNT direto, não a lista
+        inteira. Ver docstring da implementação SQLAlchemy pro motivo de
+        isso ser um método separado de get_due_for_user, não a mesma
+        chamada com len()."""
         ...
 
     async def get_by_id(self, node_id: int) -> Optional[KnowledgeNode]: ...

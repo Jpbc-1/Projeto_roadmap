@@ -6,14 +6,16 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
-      "package": "com.frontendmobile.app"
+      "package": "com.valorinho.roadmap",
+      "googleServicesFile": "./google-services.json"
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.frontendmobile.app"
+      "bundleIdentifier": "com.valorinho.roadmap"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-notifications"
     ],
     "extra": {
       "eas": {

@@ -6,8 +6,21 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.endpoints import achievements, auth, calendar_events, goals, jobs, missions, reminders, users, knowledge
+from app.api.v1.endpoints import (
+    achievements,
+    auth,
+    calendar_events,
+    goals,
+    jobs,
+    missions,
+    notifications,
+    reminders,
+    users,
+    knowledge,
+)
 from app.core.ai.gemini_client import close_shared_http_client
+from app.core.notifications.expo_push_client import close_shared_http_client as close_shared_expo_http_client
+from app.core.error_sanitization import safe_error_message
 from app.core.jobs.reminder_scheduler import start_reminder_scheduler, stop_reminder_scheduler
 from app.core.jobs.worker import start_worker, stop_worker
 from app.infrastructure.database.session import get_db_session
@@ -16,6 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -26,6 +40,7 @@ async def lifespan(app: FastAPI):
     await stop_worker()
     await stop_reminder_scheduler()
     await close_shared_http_client()
+    await close_shared_expo_http_client()
 
 
 app = FastAPI(
@@ -44,6 +59,7 @@ app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(reminders.router, prefix="/api/v1/reminders", tags=["reminders"])
 app.include_router(calendar_events.router, prefix="/api/v1/calendar-events", tags=["calendar-events"])
 app.include_router(achievements.router, prefix="/api/v1/achievements", tags=["achievements"])
+app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["notifications"])
 
 
 @app.get("/health", tags=["status"])
@@ -60,6 +76,11 @@ async def health_check_db(db: AsyncSession = Depends(get_db_session)):
     try:
         await db.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
-        return {"status": "error", "database": "unreachable", "detail": str(exc)}
+        logger.error("Health check do banco falhou", exc_info=exc)
+        return {
+            "status": "error",
+            "database": "unreachable",
+            "detail": safe_error_message(exc, "Falha ao conectar com o banco de dados"),
+        }
     return {"status": "ok", "database": "connected"}
 

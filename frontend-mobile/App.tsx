@@ -8,6 +8,7 @@ import { Caveat_600SemiBold, Caveat_700Bold } from '@expo-google-fonts/caveat';
 import { QueryClient, QueryClientProvider, focusManager, useQuery } from '@tanstack/react-query';
 import { colors } from './src/theme/colors';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { usePushNotifications } from './src/hooks/usePushNotifications';
 import AuthFlow from './src/navigation/AuthFlow';
 import OnboardingFlow from './src/navigation/OnboardingFlow';
 import { goalService } from './src/services/goalService';
@@ -102,6 +103,8 @@ function AuthenticatedGate() {
 
 function AppShell() {
   const { status } = useAuth();
+
+  usePushNotifications(status === 'authenticated');
 
   if (status === 'checking') return <LoadingGate />;
   if (status === 'unauthenticated') return <AuthFlow />;
