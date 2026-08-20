@@ -1,6 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.api.v1.dependencies import get_current_user, get_db_session
+from app.infrastructure.repositories.user_repository import SQLAlchemyUserRepository
+from app.application.auth.email_verification import SendVerificationEmailUseCase, ConfirmEmailUseCase, InvalidTokenError
+from app.infrastructure.database.models import User
 
 from app.api.v1.schemas.auth import FacebookLoginRequest, GoogleLoginRequest, Token, UserCreate, UserOut
 from app.application.auth.authenticate_user import (
@@ -125,6 +131,33 @@ async def login_with_facebook(payload: FacebookLoginRequest, db: AsyncSession = 
 
     access_token = create_access_token(subject=user.email)
     return Token(access_token=access_token)
+
+@router.post("/send-verify-email", status_code=200)
+async def send_verify_email(current_user: User = Depends(get_current_user)):
+    """Rota que o app chama para pedir o e-mail de verificação."""
+    use_case = SendVerificationEmailUseCase()
+    token = await use_case.execute(current_user.email)
+    
+    # Adicionamos o link direto na resposta para facilitar a sua vida agora!
+    return {
+        "message": "E-mail de verificação enviado com sucesso.",
+        "link_para_testar": f"http://localhost:8000/api/v1/auth/verify-email?token={token}"
+    }
+
+@router.get("/verify-email", status_code=200)
+async def verify_email(token: str, db: AsyncSession = Depends(get_db_session)):
+    """
+    Rota que valida o clique no link do e-mail. 
+    Usamos GET em vez de POST para você poder clicar no link direto no terminal!
+    """
+    repository = SQLAlchemyUserRepository(db)
+    use_case = ConfirmEmailUseCase(repository, db)
+    
+    try:
+        await use_case.execute(token)
+        return {"message": "Seu e-mail foi verificado com sucesso!"}
+    except InvalidTokenError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # Nota pro Apple Sign In (mencionado como "depois"): quando chegar a hora,
