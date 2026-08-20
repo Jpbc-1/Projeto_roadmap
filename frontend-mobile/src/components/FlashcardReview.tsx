@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Modal, Pressable, Text, TouchableOpacity, View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, typography, fonts, touchTarget } from '../theme/colors';
-import CelebrationBurst from './CelebrationBurst';
+import CelebrationBurst from './CelebrationBurst'
 import { DueReview, ReviewDifficulty } from '../services/knowledgeService';
 
 type FlashcardReviewProps = {

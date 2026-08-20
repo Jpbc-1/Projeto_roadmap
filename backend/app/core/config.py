@@ -10,7 +10,6 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/roadmap_ai"
 
-
     DB_POOL_RECYCLE_SECONDS: int = 1800
 
     SECRET_KEY: str
@@ -30,7 +29,7 @@ class Settings(BaseSettings):
 
     GEMINI_API_KEY: str = ""
 
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"#gemini-3.6-flash
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_PRO_MODEL: str = "gemini-3.7-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.1-flash-lite"
     AUTO_ADAPT_EVERY_N_CHAPTERS: int = 2
@@ -54,14 +53,20 @@ class Settings(BaseSettings):
     REGISTER_RATE_LIMIT_PER_IP: int = 5
     REGISTER_RATE_LIMIT_WINDOW_SECONDS: int = 3600
 
-
-    # só é seguro atrás de um proxy que você tem
-    # certeza que sobrescreve X-Forwarded-For a cada requisição.
+    # Ver docstring de get_client_ip em app/core/rate_limiter.py antes de
+    # ligar isso em produção -- só é seguro atrás de um proxy que você TEM
+    # CERTEZA que sobrescreve X-Forwarded-For a cada requisição.
     TRUST_PROXY_HEADERS: bool = False
 
     DEFAULT_PAGE_SIZE: int = 50
     MAX_PAGE_SIZE: int = 100
 
+    DAILY_REVIEW_LIMIT: int = 30
+
+    # OAuth social login (Google e Facebook agora; Apple é candidato óbvio
+    # depois -- ver docs/adr). Vazio por padrão: cada provider falha com
+    # erro claro SÓ quando alguém tenta usar ele sem estar configurado, não
+    # trava o boot da aplicação inteira (mesma filosofia do GEMINI_API_KEY).
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     FACEBOOK_APP_ID: str = ""
     FACEBOOK_APP_SECRET: str = ""

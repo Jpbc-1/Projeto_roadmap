@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.goals.generate_roadmap import GenerateRoadmapUseCase
 from app.application.goals.intake_goal import IntakeGoalUseCase
 from app.application.goals.moderate_goal_content import ModerateGoalContentUseCase
-from app.application.knowledge.extract_knowledge_nodes import ExtractKnowledgeNodesUseCase
+from app.application.flashcards.extract_concepts import ExtractConceptsUseCase
 from app.application.roadmaps.adapt_roadmap import AdaptRoadmapUseCase
 from app.application.roadmaps.auto_adapt_roadmap import AutoAdaptRoadmapUseCase
 from app.core.ai.gemini_client import GeminiClient
@@ -23,6 +23,8 @@ from app.domain.services.notification_content import resolve_calendar_event_cont
 from app.infrastructure.repositories.calendar_event_repository import SQLAlchemyCalendarEventRepository
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
 from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
+from app.infrastructure.repositories.deck_repository import SQLAlchemyDeckRepository
+from app.infrastructure.repositories.flashcard_repository import SQLAlchemyFlashcardRepository
 from app.infrastructure.repositories.knowledge_node_repository import SQLAlchemyKnowledgeNodeRepository
 from app.infrastructure.repositories.recommendation_repository import SQLAlchemyRecommendationRepository
 from app.infrastructure.repositories.reminder_repository import SQLAlchemyReminderRepository
@@ -43,7 +45,6 @@ async def handle_intake_goal(session: AsyncSession, payload: Dict[str, Any]) -> 
     user_repository = SQLAlchemyUserRepository(session)
     job_repository = SQLAlchemyJobRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
-
 
     moderation_ai_client = GeminiClient(
         api_key=settings.GEMINI_API_KEY,
@@ -142,9 +143,15 @@ async def handle_auto_adapt_roadmap(session: AsyncSession, payload: Dict[str, An
 
 
 async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[str, Any]) -> None:
+    """Nome do job continua "extract_knowledge_nodes" por compatibilidade
+    com jobs já enfileirados antes desta mudança -- o que ele FAZ agora é
+    mais do que extrair o nó: também julga importância e já gera o
+    flashcard candidato (ver ExtractConceptsUseCase)."""
     goal_repository = SQLAlchemyGoalRepository(session)
     roadmap_repository = SQLAlchemyRoadmapRepository(session)
     knowledge_node_repository = SQLAlchemyKnowledgeNodeRepository(session)
+    flashcard_repository = SQLAlchemyFlashcardRepository(session)
+    deck_repository = SQLAlchemyDeckRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
 
     extraction_ai_client = GeminiClient(
@@ -158,10 +165,12 @@ async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[st
         on_usage=usage.logger_for("embedding"),
     )
 
-    use_case = ExtractKnowledgeNodesUseCase(
+    use_case = ExtractConceptsUseCase(
         goal_repository=goal_repository,
         roadmap_repository=roadmap_repository,
         knowledge_node_repository=knowledge_node_repository,
+        flashcard_repository=flashcard_repository,
+        deck_repository=deck_repository,
         extraction_ai_client=extraction_ai_client,
         embedding_ai_client=embedding_ai_client,
     )
@@ -169,7 +178,6 @@ async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[st
         goal_id=payload["goal_id"],
         user_id=payload["user_id"],
         chapter_id=payload["chapter_id"],
-        user_timezone=payload.get("user_timezone", "America/Sao_Paulo"),
     )
     await usage.flush(session)
 
@@ -199,7 +207,7 @@ async def handle_send_reminder_notification(session: AsyncSession, payload: Dict
         roadmap_repository = SQLAlchemyRoadmapRepository(session)
         reminder = await reminder_repository.get_by_id(source_id)
         if reminder is None or not reminder.is_active:
-            return  
+            return 
         pending_mission_title = None
         if reminder.notification_style == "app_generated":
             pending_mission_title = await roadmap_repository.get_current_pending_mission_title_for_user(
@@ -242,7 +250,7 @@ async def _send_push(session: AsyncSession, user_id: int, title: str, body: str)
     token_repository = SQLAlchemyUserPushTokenRepository(session)
     tokens = await token_repository.list_by_user_id(user_id)
     if not tokens:
-        return  
+        return 
 
     for chunk_start in range(0, len(tokens), expo_push_client.EXPO_MAX_MESSAGES_PER_REQUEST):
         chunk = tokens[chunk_start : chunk_start + expo_push_client.EXPO_MAX_MESSAGES_PER_REQUEST]
@@ -267,7 +275,6 @@ async def _send_push(session: AsyncSession, user_id: int, title: str, body: str)
 
         if dead_tokens:
             await token_repository.delete_by_tokens(dead_tokens)
-
 
 
 JOB_HANDLERS = {

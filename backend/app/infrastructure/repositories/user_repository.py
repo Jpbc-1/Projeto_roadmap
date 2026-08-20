@@ -7,10 +7,12 @@ from app.infrastructure.database.models import (
     AIUsageLog,
     BackgroundJob,
     CalendarEvent,
+    Deck,
+    Flashcard,
+    FlashcardReview,
     Goal,
     GoalRecommendation,
     KnowledgeNode,
-    KnowledgeReview,
     Mission,
     MissionExecution,
     OAuthAccount,
@@ -69,13 +71,13 @@ class SQLAlchemyUserRepository:
         chapter_ids_subquery = (
             select(RoadmapChapter.id).where(RoadmapChapter.roadmap_id.in_(roadmap_ids_subquery)).scalar_subquery()
         )
-        knowledge_node_ids_subquery = (
-            select(KnowledgeNode.id).where(KnowledgeNode.user_id == user_id).scalar_subquery()
-        )
+        flashcard_ids_subquery = select(Flashcard.id).where(Flashcard.user_id == user_id).scalar_subquery()
 
         await self.session.execute(
-            delete(KnowledgeReview).where(KnowledgeReview.knowledge_node_id.in_(knowledge_node_ids_subquery))
+            delete(FlashcardReview).where(FlashcardReview.flashcard_id.in_(flashcard_ids_subquery))
         )
+        await self.session.execute(delete(Flashcard).where(Flashcard.user_id == user_id))
+        await self.session.execute(delete(KnowledgeNode).where(KnowledgeNode.user_id == user_id))
         await self.session.execute(delete(MissionExecution).where(MissionExecution.user_id == user_id))
 
         await self.session.execute(delete(Mission).where(Mission.chapter_id.in_(chapter_ids_subquery)))
@@ -84,7 +86,7 @@ class SQLAlchemyUserRepository:
         await self.session.execute(
             delete(GoalRecommendation).where(GoalRecommendation.goal_id.in_(goal_ids_subquery))
         )
-        await self.session.execute(delete(KnowledgeNode).where(KnowledgeNode.user_id == user_id))
+        await self.session.execute(delete(Deck).where(Deck.user_id == user_id))
         await self.session.execute(delete(Goal).where(Goal.user_id == user_id))
 
         await self.session.execute(delete(UserAchievement).where(UserAchievement.user_id == user_id))

@@ -11,7 +11,6 @@ from app.api.v1.schemas.goals import (
     GoalOut,
     RecommendationOut,
 )
-from app.api.v1.schemas.knowledge import CreateKnowledgeNodeRequest, KnowledgeNodeOut
 from app.api.v1.schemas.roadmap import (
     AdaptGoalRequest,
     AdaptGoalResponse,
@@ -45,8 +44,6 @@ from app.application.roadmaps.create_chapter import (
 from app.application.roadmaps.get_roadmap import GetRoadmapUseCase, RoadmapNotFoundError
 from app.application.roadmaps.propose_chapter_operation import ProposeChapterOperationUseCase
 from app.application.roadmaps.set_chapter_lock import SetChapterLockUseCase
-from app.application.knowledge.create_knowledge_node import CreateKnowledgeNodeUseCase
-from app.application.knowledge.spaced_repetition import compute_mastery_level
 from app.core.ai.gemini_client import GeminiClient
 from app.core.ai.usage_logging import UsageCollector
 from app.core.config import settings
@@ -55,7 +52,6 @@ from app.infrastructure.database.models import User
 from app.infrastructure.database.session import get_db_session
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
 from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
-from app.infrastructure.repositories.knowledge_node_repository import SQLAlchemyKnowledgeNodeRepository
 from app.infrastructure.repositories.mission_repository import SQLAlchemyMissionRepository
 from app.infrastructure.repositories.recommendation_repository import SQLAlchemyRecommendationRepository
 from app.infrastructure.repositories.roadmap_repository import SQLAlchemyRoadmapRepository
@@ -198,6 +194,8 @@ async def get_roadmap(
     except RoadmapNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
+    # Capítulo/missão "atuais" calculados aqui pra o front não precisar
+    # varrer chapters/missions procurando o primeiro não concluído.
     current_chapter = next((c for c in roadmap.chapters if c.status == "in_progress"), None)
     current_mission_id = None
     if current_chapter is not None:
@@ -452,31 +450,3 @@ async def set_chapter_lock(
 
     verb = "travado" if payload.locked else "destravado"
     return {"message": f"Capítulo {verb} para alterações da IA."}
-
-
-@router.post("/{goal_id}/knowledge", response_model=KnowledgeNodeOut, status_code=status.HTTP_201_CREATED)
-async def create_knowledge_node(
-    goal_id: int,
-    payload: CreateKnowledgeNodeRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    goal_repository = SQLAlchemyGoalRepository(db)
-    knowledge_node_repository = SQLAlchemyKnowledgeNodeRepository(db)
-    embedding_ai_client = GeminiClient(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_EMBEDDING_MODEL)
-    use_case = CreateKnowledgeNodeUseCase(goal_repository, knowledge_node_repository, embedding_ai_client)
-
-    try:
-        result = await use_case.execute(
-            goal_id=goal_id, user_id=current_user.id, topic_name=payload.topic_name
-        )
-    except (GoalNotFoundError, GoalAccessDeniedError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
-
-    return KnowledgeNodeOut(
-        node_id=result.node.id,
-        topic_name=result.node.topic_name,
-        next_review_date=result.node.next_review_date,
-        mastery_level=compute_mastery_level(result.node.interval_days),
-        was_duplicate=result.was_duplicate,
-    )

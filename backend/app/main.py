@@ -10,13 +10,14 @@ from app.api.v1.endpoints import (
     achievements,
     auth,
     calendar_events,
+    decks,
+    flashcards,
     goals,
     jobs,
     missions,
     notifications,
     reminders,
     users,
-    knowledge,
 )
 from app.core.ai.gemini_client import close_shared_http_client
 from app.core.notifications.expo_push_client import close_shared_http_client as close_shared_expo_http_client
@@ -54,7 +55,8 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(goals.router, prefix="/api/v1/goals", tags=["goals"])
 app.include_router(missions.router, prefix="/api/v1/missions", tags=["missions"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["knowledge"])
+app.include_router(decks.router, prefix="/api/v1/decks", tags=["decks"])
+app.include_router(flashcards.router, prefix="/api/v1/flashcards", tags=["flashcards"])
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(reminders.router, prefix="/api/v1/reminders", tags=["reminders"])
 app.include_router(calendar_events.router, prefix="/api/v1/calendar-events", tags=["calendar-events"])
