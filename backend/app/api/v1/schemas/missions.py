@@ -21,7 +21,6 @@ class MissionExecutionOut(BaseModel):
     ai_feedback: Optional[str]
     difficulty_rating: Optional[str]
     satisfaction_rating: Optional[int]
-    # Campos novos, aditivos (não quebram um client que só lia os de cima):
     chapter_completed: bool = False
     goal_completed: bool = False
     newly_unlocked_achievements: List[AchievementOut] = []

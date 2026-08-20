@@ -23,17 +23,7 @@ export default function AgendaBackground({ children }: AgendaBackgroundProps) {
           <View key={i} style={[styles.ruleLine, { top: (i + 1) * LINE_SPACING }]} />
         ))}
 
-        {/* lombada: uma sombra bem sutil descendo o centro, só o
-            suficiente pra sugerir "duas páginas encontrando-se", sem
-            virar uma linha dura no meio do conteúdo */}
-        <View style={styles.gutterWrap} pointerEvents="none">
-          <LinearGradient
-            colors={['transparent', colors.agendaGutterShadow, 'transparent']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.gutter}
-          />
-        </View>
+        
 
         {/* sombra de borda bem leve no topo, como se a página tivesse
             uma leve curvatura por estar presa numa espiral logo acima */}
@@ -61,17 +51,8 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.agendaRuleLine,
   },
-  gutterWrap: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: '50%',
-    marginLeft: -18,
-    width: 36,
-  },
-  gutter: {
-    flex: 1,
-  },
+  
+  
   topShadow: {
     position: 'absolute',
     top: 0,

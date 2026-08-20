@@ -1,9 +1,29 @@
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infrastructure.database.models import User
+from app.infrastructure.database.models import (
+    AIUsageLog,
+    BackgroundJob,
+    CalendarEvent,
+    Deck,
+    Flashcard,
+    FlashcardReview,
+    Goal,
+    GoalRecommendation,
+    KnowledgeNode,
+    Mission,
+    MissionExecution,
+    OAuthAccount,
+    Reminder,
+    Roadmap,
+    RoadmapChapter,
+    User,
+    UserAchievement,
+    UserPushToken,
+    UserStats,
+)
 
 
 class SQLAlchemyUserRepository:
@@ -43,4 +63,41 @@ class SQLAlchemyUserRepository:
         await self.session.execute(
             update(User).where(User.id == user_id).values(credits_remaining=User.credits_remaining + amount)
         )
+        await self.session.commit()
+
+    async def delete_account(self, user_id: int) -> None:
+        goal_ids_subquery = select(Goal.id).where(Goal.user_id == user_id).scalar_subquery()
+        roadmap_ids_subquery = select(Roadmap.id).where(Roadmap.goal_id.in_(goal_ids_subquery)).scalar_subquery()
+        chapter_ids_subquery = (
+            select(RoadmapChapter.id).where(RoadmapChapter.roadmap_id.in_(roadmap_ids_subquery)).scalar_subquery()
+        )
+        flashcard_ids_subquery = select(Flashcard.id).where(Flashcard.user_id == user_id).scalar_subquery()
+
+        await self.session.execute(
+            delete(FlashcardReview).where(FlashcardReview.flashcard_id.in_(flashcard_ids_subquery))
+        )
+        await self.session.execute(delete(Flashcard).where(Flashcard.user_id == user_id))
+        await self.session.execute(delete(KnowledgeNode).where(KnowledgeNode.user_id == user_id))
+        await self.session.execute(delete(MissionExecution).where(MissionExecution.user_id == user_id))
+
+        await self.session.execute(delete(Mission).where(Mission.chapter_id.in_(chapter_ids_subquery)))
+        await self.session.execute(delete(RoadmapChapter).where(RoadmapChapter.roadmap_id.in_(roadmap_ids_subquery)))
+        await self.session.execute(delete(Roadmap).where(Roadmap.goal_id.in_(goal_ids_subquery)))
+        await self.session.execute(
+            delete(GoalRecommendation).where(GoalRecommendation.goal_id.in_(goal_ids_subquery))
+        )
+        await self.session.execute(delete(Deck).where(Deck.user_id == user_id))
+        await self.session.execute(delete(Goal).where(Goal.user_id == user_id))
+
+        await self.session.execute(delete(UserAchievement).where(UserAchievement.user_id == user_id))
+        await self.session.execute(delete(UserStats).where(UserStats.user_id == user_id))
+        await self.session.execute(delete(Reminder).where(Reminder.user_id == user_id))
+        await self.session.execute(delete(CalendarEvent).where(CalendarEvent.user_id == user_id))
+        await self.session.execute(delete(OAuthAccount).where(OAuthAccount.user_id == user_id))
+        await self.session.execute(delete(UserPushToken).where(UserPushToken.user_id == user_id))
+        await self.session.execute(delete(BackgroundJob).where(BackgroundJob.user_id == user_id))
+        await self.session.execute(delete(AIUsageLog).where(AIUsageLog.user_id == user_id))
+
+        await self.session.execute(delete(User).where(User.id == user_id))
+
         await self.session.commit()

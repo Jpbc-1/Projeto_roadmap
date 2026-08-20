@@ -62,7 +62,7 @@ export default function DashboardScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <HomeHeader
           name={displayName}
-          avatarEmoji="🦊"
+          avatarEmoji="🦅"
           streakDays={profile?.current_streak ?? 0}
           level={profile?.current_level ?? 1}
           hasUnreadNotification={dueReviewCount > 0}

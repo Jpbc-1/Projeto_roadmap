@@ -40,6 +40,7 @@ class GetRoadmapUseCase:
                 "awaiting_info": "Responda as perguntas pendentes (GET /goals/{id}) para continuar a geração.",
                 "rejected": goal.generation_error or "Este objetivo foi rejeitado na moderação.",
                 "failed": goal.generation_error or "A geração do roadmap falhou. Tente criar o objetivo de novo.",
+                "deleted": "O roadmap deste objetivo foi apagado.",
             }
             raise RoadmapNotFoundError(
                 status_messages.get(

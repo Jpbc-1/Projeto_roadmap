@@ -9,6 +9,9 @@ python-dotenv==1.0.1
 httpx==0.27.2
 requests==2.32.4
  
+# Repetição espaçada
+fsrs==6.3.2
+
 # Autenticação
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1

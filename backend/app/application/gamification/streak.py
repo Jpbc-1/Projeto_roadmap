@@ -37,11 +37,11 @@ def calculate_streak_update(current_stats: Optional[object], xp_to_add: int, tod
         )
 
     if current_stats.last_activity_date == today:
-        new_streak = current_stats.current_streak  # já ativo hoje, streak não muda
+        new_streak = current_stats.current_streak  
     elif current_stats.last_activity_date == today - timedelta(days=1):
-        new_streak = current_stats.current_streak + 1  # ativo ontem -> streak continua
+        new_streak = current_stats.current_streak + 1  
     else:
-        new_streak = 1  # quebrou o streak -> recomeça
+        new_streak = 1  
 
     new_total_xp = current_stats.total_xp + xp_to_add
     new_max_streak = max(current_stats.max_streak, new_streak)

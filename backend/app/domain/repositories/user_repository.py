@@ -38,3 +38,19 @@ class UserRepository(Protocol):
         (ex: criar roadmap) termina rejeitada ou falha em todas as
         tentativas, pra não cobrar por algo que não aconteceu de verdade."""
         ...
+
+    async def delete_account(self, user_id: int) -> None:
+        """Apaga a conta e TUDO que pertence a ela -- goals, roadmaps
+        (com capítulos/missões/execuções), reminders, calendar_events,
+        conquistas, stats, contas OAuth vinculadas, push tokens, baralhos
+        e flashcards (com histórico de revisão), conceitos extraídos,
+        histórico de uso de IA e jobs em background. Ver a implementação
+        SQLAlchemy pra ordem exata (é estrita: filhos antes de pais em
+        cada cadeia, o banco não tem ON DELETE CASCADE em nenhuma dessas
+        FKs).
+
+        Irreversível -- quem chama (DeleteAccountUseCase) é responsável
+        por já ter confirmado a identidade da pessoa (reautenticação por
+        senha) antes de chegar aqui; este método não pede confirmação
+        nenhuma, só executa."""
+        ...

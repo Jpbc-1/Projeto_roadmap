@@ -24,6 +24,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -31,6 +32,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,8 +47,8 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(30), unique=True, index=True, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    plan: Mapped[str] = mapped_column(String(20), default="free")
-    credits_remaining: Mapped[int] = mapped_column(Integer, default=500)
+    plan: Mapped[str] = mapped_column(String(20), default="plus")
+    credits_remaining: Mapped[int] = mapped_column(Integer, default=10000)
 
     timezone: Mapped[str] = mapped_column(String(50), default="America/Sao_Paulo")
 
@@ -55,6 +57,7 @@ class User(Base):
     goals: Mapped[list["Goal"]] = relationship(back_populates="user")
     stats: Mapped[Optional["UserStats"]] = relationship(back_populates="user", uselist=False)
     achievements: Mapped[list["UserAchievement"]] = relationship(back_populates="user")
+    push_tokens: Mapped[list["UserPushToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
     email_verified = Column(Boolean, default=False, server_default="false", nullable=False)
 
@@ -186,7 +189,7 @@ class Achievement(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    required_condition: Mapped[str] = mapped_column(String(100))  # ex: "7_day_streak"
+    required_condition: Mapped[str] = mapped_column(String(100)) 
     icon_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     unlocked_by: Mapped[list["UserAchievement"]] = relationship(back_populates="achievement")
@@ -207,33 +210,132 @@ class UserAchievement(Base):
 
 
 class KnowledgeNode(Base):
+    """Um CONCEITO identificado pela extração do Mapa do Conhecimento (ver
+    app/application/flashcards/extract_concepts.py) -- só o metadado do
+    conceito em si (nome + embedding, pra dedup semântico entre extrações
+    diferentes do mesmo goal), não o material de revisão.
+
+    NÃO tem mais estado de repetição espaçada aqui (antes tinha
+    next_review_date/interval_days/easiness_factor/repetition_count) --
+    isso agora vive em Flashcard, que é a unidade de fato revisável e pode
+    nem existir pra este node (se importance_score < FLASHCARD_MIN_IMPORTANCE,
+    ver extract_concepts.py) ou pode ser rejeitada pela pessoa na tela de
+    aprovação (ver Flashcard.status == "pending_review")."""
+
     __tablename__ = "knowledge_nodes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    mission_id: Mapped[Optional[int]] = mapped_column(ForeignKey("missions.id"), nullable=True, index=True)
     topic_name: Mapped[str] = mapped_column(String(255))
     embedding: Mapped[list] = mapped_column(JSON)
+    importance_score: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    last_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    next_review_date: Mapped[date] = mapped_column(Date)
-    interval_days: Mapped[int] = mapped_column(Integer, default=1)
-    easiness_factor: Mapped[float] = mapped_column(Float, default=2.5)
-    repetition_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class KnowledgeReview(Base):
-    __tablename__ = "knowledge_reviews"
+class Deck(Base):
+    """Agrupamento de flashcards. Toda conta tem exatamente 1 baralho
+    principal (is_main=True), criado sob demanda na primeira vez que a
+    pessoa precisa dele (ver get_or_create_main_deck em
+    app/application/flashcards/deck_provisioning.py) -- não no cadastro,
+    pra não criar uma linha morta pra quem nunca chega a usar a área de
+    revisões.
+
+    is_main é único por usuário (ver unique index parcial na migration) --
+    é o baralho que os flashcards aprovados da extração de IA caem por
+    padrão, e o ÚNICO que conta pro streak/bônus diário (ver
+    answer_review.py) -- baralhos extra que a pessoa criar por conta
+    própria são pra organização pessoal, sem pressão de sequência."""
+
+    __tablename__ = "decks"
+    __table_args__ = (
+        Index("ix_decks_user_id_is_main_unique", "user_id", unique=True, postgresql_where=text("is_main = true")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    knowledge_node_id: Mapped[int] = mapped_column(ForeignKey("knowledge_nodes.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    is_main: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    flashcards: Mapped[list["Flashcard"]] = relationship(back_populates="deck", cascade="all, delete-orphan")
+
+
+class Flashcard(Base):
+    """A unidade revisável de verdade -- pergunta (front) + resposta
+    (back) + estado da repetição espaçada. Pode nascer de duas formas:
+    extraída pela IA a partir de um KnowledgeNode importante (
+    knowledge_node_id preenchido) ou criada manualmente pela pessoa
+    (knowledge_node_id NULL).
+
+    status:
+    - "pending_review": a IA gerou este candidato, mas a pessoa ainda não
+      decidiu se quer ele no baralho de verdade (ver tela de aprovação em
+      GET /flashcards/pending) -- due/fsrs_state ainda não têm sentido
+      real aqui, o card não está "agendado" pra nada ainda.
+    - "active": aprovado (ou criado manualmente), sendo revisado de
+      verdade -- entra em GET /flashcards/due quando due <= agora.
+    - "graduated": a pessoa acertou fácil repetidamente (ver
+      consecutive_easy_count/EASY_STREAK_TO_GRADUATE em answer_review.py)
+      -- some da rotina de revisão, mas fica salvo (histórico, e dá pra
+      reativar) em vez de apagado. Apagar de vez é uma ação separada e
+      explícita (DELETE /flashcards/{id}), não automática.
+
+    Campos fsrs_state/fsrs_step/stability/difficulty/due/last_review_at
+    espelham exatamente fsrs.Card (ver app/application/flashcards/
+    scheduler.py) -- não são um formato próprio: é literalmente o que a
+    biblioteca precisa pra reconstruir o Card na próxima revisão, salvo
+    campo a campo."""
+
+    __tablename__ = "flashcards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    deck_id: Mapped[int] = mapped_column(ForeignKey("decks.id"), index=True)
+    knowledge_node_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=True, index=True
+    )
+    front: Mapped[str] = mapped_column(Text)
+    back: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+
+
+    fsrs_state: Mapped[str] = mapped_column(String(15), default="learning")
+    fsrs_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    stability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    difficulty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    due: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    consecutive_easy_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    deck: Mapped["Deck"] = relationship(back_populates="flashcards")
+
+
+class FlashcardReview(Base):
+    """Log de auditoria de cada resposta de revisão -- old/new stability e
+    old/new difficulty são os dois parâmetros centrais do FSRS (ver
+    docstring de Flashcard), aqui preservados por linha pra dar pra
+    reconstruir a evolução de um card ao longo do tempo (e, no futuro,
+    treinar pesos personalizados por usuário -- o próprio pacote fsrs
+    suporta isso a partir do review log, mas exige um volume de revisões
+    que não faz sentido tentar prematuramente, ver scheduler.py)."""
+
+    __tablename__ = "flashcard_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    flashcard_id: Mapped[int] = mapped_column(ForeignKey("flashcards.id"), index=True)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    difficulty: Mapped[str] = mapped_column(String(10))  
-    old_interval: Mapped[int] = mapped_column(Integer)
-    new_interval: Mapped[int] = mapped_column(Integer)
-    old_factor: Mapped[float] = mapped_column(Float)
-    new_factor: Mapped[float] = mapped_column(Float)
+    rating: Mapped[str] = mapped_column(String(10))  
+    old_stability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    new_stability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    old_difficulty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    new_difficulty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    elapsed_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class GoalRecommendation(Base):
@@ -319,9 +421,9 @@ class OAuthAccount(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(20))  # "google" | "facebook"
+    provider: Mapped[str] = mapped_column(String(20)) 
     provider_user_id: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(255))  # e-mail no momento do vínculo, informativo
+    email: Mapped[str] = mapped_column(String(255))  
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -355,7 +457,7 @@ class Reminder(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     label: Mapped[str] = mapped_column(String(120))
     time_of_day: Mapped[time] = mapped_column(Time)
-    days_of_week: Mapped[list] = mapped_column(JSON)  # ex: [0,1,2,3,4,5,6], 0=domingo
+    days_of_week: Mapped[list] = mapped_column(JSON)  
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_dispatched_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notification_timing_mode: Mapped[str] = mapped_column(String(20), default="app_default")
@@ -393,3 +495,36 @@ class CalendarEvent(Base):
     custom_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reminder_dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserPushToken(Base):
+    """Device token (Expo push token) de um aparelho de um usuário -- é
+    pra ONDE o handler de disparo (core/jobs/handlers.py, _send_push)
+    manda a notificação de verdade (Reminder/CalendarEvent só decidem
+    QUANDO e O QUÊ, ver domain/services/notification_content.py; esta
+    tabela decide PRA ONDE).
+
+    Uma linha por APARELHO, não por usuário: uma pessoa pode ter vários
+    (celular + tablet, por exemplo) -- todos recebem a notificação.
+
+    push_token é unique (não (user_id, push_token)) de propósito: o
+    mesmo token físico nunca deveria existir em duas linhas, e isso é o
+    que permite o UPSERT do registro (app/application/notifications/
+    register_push_token.py) ser "achar por token", não por combinação
+    user+token -- resolve token igual chegando de outra conta (troca de
+    usuário no mesmo aparelho) sem duplicar nem exigir lógica extra no
+    app cliente.
+    """
+
+    __tablename__ = "user_push_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    push_token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    platform: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship(back_populates="push_tokens")

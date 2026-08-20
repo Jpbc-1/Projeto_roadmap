@@ -43,9 +43,6 @@ class UpdateReminderUseCase:
         if custom_message is not None:
             fields["custom_message"] = custom_message
 
-        # timing_mode e horário sempre andam juntos -- resolve os dois ou
-        # nenhum, pra nunca deixar o registro com mode='custom' mas
-        # horário do modo antigo (ou vice-versa).
         if notification_timing_mode is not None:
             fields["notification_timing_mode"] = notification_timing_mode
             if notification_timing_mode == "custom":

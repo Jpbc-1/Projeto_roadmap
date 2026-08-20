@@ -13,6 +13,10 @@ import asyncio
 import time
 from typing import Dict, Tuple
 
+from fastapi import Request
+
+from app.core.config import settings
+
 
 class InMemoryRateLimiter:
     def __init__(self):
@@ -42,4 +46,38 @@ class InMemoryRateLimiter:
             self._buckets.pop(key, None)
 
 
+
 login_rate_limiter = InMemoryRateLimiter()
+
+register_rate_limiter = InMemoryRateLimiter()
+
+
+def get_client_ip(request: Request) -> str:
+    """IP do cliente pra chave de rate limit (por enquanto só usado em
+    /register e /login).
+
+    Por padrão usa request.client.host (o socket que abriu a conexão TCP
+    com o processo Python) -- correto se a API recebe requisição direto da
+    internet, mas ERRADO se houver um proxy reverso/load balancer na
+    frente (Nginx, Railway, Render, Cloudflare, ALB etc.): nesse caso,
+    TODO mundo apareceria com o IP do proxy, e o rate limit efetivamente
+    viraria "todo mundo compartilha o mesmo balde".
+
+    Se a API estiver atrás de um proxy confiável que você SABE que
+    sobrescreve (não só repassa) o header X-Forwarded-For a cada
+    requisição, ligue settings.TRUST_PROXY_HEADERS=true no ambiente de
+    produção -- só então usamos o primeiro IP da lista desse header.
+    Atenção: NUNCA ligar essa flag sem ter certeza disso, porque
+    X-Forwarded-For é só um header HTTP comum -- qualquer cliente pode
+    mandar o valor que quiser nele. Se não há proxy confiável reescrevendo
+    esse header antes de chegar aqui, confiar nele permite burlar o rate
+    limit trivialmente (manda um X-Forwarded-For diferente a cada
+    requisição)."""
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            first_ip = forwarded_for.split(",")[0].strip()
+            if first_ip:
+                return first_ip
+
+    return request.client.host if request.client else "unknown"

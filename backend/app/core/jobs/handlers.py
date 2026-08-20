@@ -4,28 +4,35 @@ mesma lógica que antes vivia solta dentro de _generate_roadmap_background,
 _auto_adapt_background e _extract_knowledge_background nos endpoints, só
 que agora persistida como job em vez de FastAPI BackgroundTasks."""
 
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.goals.generate_roadmap import GenerateRoadmapUseCase
 from app.application.goals.intake_goal import IntakeGoalUseCase
 from app.application.goals.moderate_goal_content import ModerateGoalContentUseCase
-from app.application.knowledge.extract_knowledge_nodes import ExtractKnowledgeNodesUseCase
+from app.application.flashcards.extract_concepts import ExtractConceptsUseCase
 from app.application.roadmaps.adapt_roadmap import AdaptRoadmapUseCase
 from app.application.roadmaps.auto_adapt_roadmap import AutoAdaptRoadmapUseCase
 from app.core.ai.gemini_client import GeminiClient
 from app.core.ai.usage_logging import UsageCollector
 from app.core.config import settings
+from app.core.notifications import expo_push_client
 from app.domain.services.notification_content import resolve_calendar_event_content, resolve_reminder_content
 from app.infrastructure.repositories.calendar_event_repository import SQLAlchemyCalendarEventRepository
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
 from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
+from app.infrastructure.repositories.deck_repository import SQLAlchemyDeckRepository
+from app.infrastructure.repositories.flashcard_repository import SQLAlchemyFlashcardRepository
 from app.infrastructure.repositories.knowledge_node_repository import SQLAlchemyKnowledgeNodeRepository
 from app.infrastructure.repositories.recommendation_repository import SQLAlchemyRecommendationRepository
 from app.infrastructure.repositories.reminder_repository import SQLAlchemyReminderRepository
 from app.infrastructure.repositories.roadmap_repository import SQLAlchemyRoadmapRepository
+from app.infrastructure.repositories.user_push_token_repository import SQLAlchemyUserPushTokenRepository
 from app.infrastructure.repositories.user_repository import SQLAlchemyUserRepository
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_intake_goal(session: AsyncSession, payload: Dict[str, Any]) -> None:
@@ -136,9 +143,15 @@ async def handle_auto_adapt_roadmap(session: AsyncSession, payload: Dict[str, An
 
 
 async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[str, Any]) -> None:
+    """Nome do job continua "extract_knowledge_nodes" por compatibilidade
+    com jobs já enfileirados antes desta mudança -- o que ele FAZ agora é
+    mais do que extrair o nó: também julga importância e já gera o
+    flashcard candidato (ver ExtractConceptsUseCase)."""
     goal_repository = SQLAlchemyGoalRepository(session)
     roadmap_repository = SQLAlchemyRoadmapRepository(session)
     knowledge_node_repository = SQLAlchemyKnowledgeNodeRepository(session)
+    flashcard_repository = SQLAlchemyFlashcardRepository(session)
+    deck_repository = SQLAlchemyDeckRepository(session)
     usage = UsageCollector(user_id=payload.get("user_id"))
 
     extraction_ai_client = GeminiClient(
@@ -152,10 +165,12 @@ async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[st
         on_usage=usage.logger_for("embedding"),
     )
 
-    use_case = ExtractKnowledgeNodesUseCase(
+    use_case = ExtractConceptsUseCase(
         goal_repository=goal_repository,
         roadmap_repository=roadmap_repository,
         knowledge_node_repository=knowledge_node_repository,
+        flashcard_repository=flashcard_repository,
+        deck_repository=deck_repository,
         extraction_ai_client=extraction_ai_client,
         embedding_ai_client=embedding_ai_client,
     )
@@ -163,7 +178,6 @@ async def handle_extract_knowledge_nodes(session: AsyncSession, payload: Dict[st
         goal_id=payload["goal_id"],
         user_id=payload["user_id"],
         chapter_id=payload["chapter_id"],
-        user_timezone=payload.get("user_timezone", "America/Sao_Paulo"),
     )
     await usage.flush(session)
 
@@ -180,9 +194,11 @@ async def handle_send_reminder_notification(session: AsyncSession, payload: Dict
     deixaria a notificação desatualizada (avisando de algo que a pessoa
     já fez).
 
-    Envio de push de verdade (FCM/APNs) ainda não está plugado -- fica
-    logado por enquanto. Structure já pronta pra isso entrar sem mudar
-    mais nada aqui, só a função _send_push."""
+    Envio de verdade via Expo Push API (ver _send_push): manda pra todos
+    os aparelhos que o usuário tiver registrado em UserPushToken. Se não
+    tiver nenhum (nunca abriu o app com push habilitado, por exemplo),
+    _send_push não faz nada -- não é erro, é o estado normal antes do
+    primeiro registro."""
     source_type = payload["source_type"]
     source_id = payload["source_id"]
 
@@ -198,7 +214,7 @@ async def handle_send_reminder_notification(session: AsyncSession, payload: Dict
                 reminder.user_id
             )
         content = resolve_reminder_content(reminder, pending_mission_title=pending_mission_title)
-        await _send_push(user_id=reminder.user_id, title=content.title, body=content.body)
+        await _send_push(session, user_id=reminder.user_id, title=content.title, body=content.body)
 
     elif source_type == "calendar_event":
         event_repository = SQLAlchemyCalendarEventRepository(session)
@@ -206,21 +222,59 @@ async def handle_send_reminder_notification(session: AsyncSession, payload: Dict
         if event is None or not event.notify_enabled:
             return
         content = resolve_calendar_event_content(event)
-        await _send_push(user_id=event.user_id, title=content.title, body=content.body)
+        await _send_push(session, user_id=event.user_id, title=content.title, body=content.body)
 
     else:
         raise ValueError(f"source_type desconhecido em send_reminder_notification: {source_type!r}")
 
 
-async def _send_push(user_id: int, title: str, body: str) -> None:
-    """TODO: plugar um provedor de push de verdade (FCM é o caminho mais
-    direto pra Android+iOS com um SDK só). Precisa também de uma tabela
-    pra guardar o device token de cada usuário (não existe ainda) -- sem
-    token não tem pra onde mandar. Por ora, só loga, pra fila/CRUD/
-    agendamento poderem ser testados de ponta a ponta sem depender disso."""
-    import logging
+async def _send_push(session: AsyncSession, user_id: int, title: str, body: str) -> None:
+    """Envia a notificação via Expo Push API pra TODOS os aparelhos que
+    esse usuário tem registrados (UserPushToken) -- uma pessoa pode ter
+    celular + tablet, por exemplo, e todos devem receber.
 
-    logging.getLogger("reminders").info("PUSH (stub) user_id=%s title=%r body=%r", user_id, title, body)
+    Falha parcial não derruba o envio inteiro: o retorno do Expo é
+    processado token a token, então se o envio pra UM aparelho falhar
+    (ou o token dele estiver morto), os outros aparelhos do mesmo
+    usuário ainda recebem a notificação normalmente.
+
+    Se a chamada ao Expo falhar por completo (rede fora, credenciais
+    erradas, etc. -- ver ExpoPushAPIError), a exceção é deixada subir
+    de propósito: isso faz handle_send_reminder_notification falhar e o
+    worker re-agendar esse job com backoff exponencial (mesma
+    infraestrutura de retry que qualquer outro handler já usa, ver
+    job_repository.mark_failed_or_retry) -- é exatamente o que a própria
+    Expo recomenda pra erro de rede/5xx, sem precisar duplicar lógica de
+    retry aqui.
+    """
+    token_repository = SQLAlchemyUserPushTokenRepository(session)
+    tokens = await token_repository.list_by_user_id(user_id)
+    if not tokens:
+        return 
+
+    for chunk_start in range(0, len(tokens), expo_push_client.EXPO_MAX_MESSAGES_PER_REQUEST):
+        chunk = tokens[chunk_start : chunk_start + expo_push_client.EXPO_MAX_MESSAGES_PER_REQUEST]
+        messages = [{"to": token.push_token, "title": title, "body": body, "data": {}} for token in chunk]
+
+        response = await expo_push_client.send_push_batch(messages)
+        tickets = response.get("data", [])
+
+        dead_tokens: List[str] = []
+        for token_row, ticket in zip(chunk, tickets):
+            if not isinstance(ticket, dict) or ticket.get("status") != "error":
+                continue  
+            details = ticket.get("details") or {}
+            if details.get("error") == "DeviceNotRegistered":
+                dead_tokens.append(token_row.push_token)
+            else:
+                logger.warning(
+                    "Expo push: ticket de erro (user_id=%s, não DeviceNotRegistered): %s",
+                    user_id,
+                    ticket.get("message"),
+                )
+
+        if dead_tokens:
+            await token_repository.delete_by_tokens(dead_tokens)
 
 
 JOB_HANDLERS = {

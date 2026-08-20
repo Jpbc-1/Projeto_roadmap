@@ -403,6 +403,7 @@ class SQLAlchemyRoadmapRepository:
 
         await self.session.execute(delete(Mission).where(Mission.id == mission_id))
 
+
         result = await self.session.execute(
             select(Mission).where(Mission.chapter_id == chapter_id).order_by(Mission.order_index)
         )
@@ -442,6 +443,7 @@ class SQLAlchemyRoadmapRepository:
         chapter = await self.session.get(RoadmapChapter, chapter_id)
         if chapter is None:
             return
+
 
         result = await self.session.execute(
             select(Mission.id)
@@ -520,6 +522,7 @@ class SQLAlchemyRoadmapRepository:
         if not roadmaps:
             return None
 
+
         current_chapter = next((c for c in roadmaps[0].chapters if c.status == "in_progress"), None)
         if current_chapter is None or not current_chapter.missions:
             return None
@@ -534,3 +537,15 @@ class SQLAlchemyRoadmapRepository:
 
         next_mission = next((m for m in current_chapter.missions if m.id not in completed_ids), None)
         return next_mission.title if next_mission else None
+
+    async def delete_roadmap(self, roadmap_id: int) -> None:
+        chapter_ids_subquery = select(RoadmapChapter.id).where(RoadmapChapter.roadmap_id == roadmap_id).scalar_subquery()
+        mission_ids_subquery = select(Mission.id).where(Mission.chapter_id.in_(chapter_ids_subquery)).scalar_subquery()
+
+        await self.session.execute(
+            delete(MissionExecution).where(MissionExecution.mission_id.in_(mission_ids_subquery))
+        )
+        await self.session.execute(delete(Mission).where(Mission.chapter_id.in_(chapter_ids_subquery)))
+        await self.session.execute(delete(RoadmapChapter).where(RoadmapChapter.roadmap_id == roadmap_id))
+        await self.session.execute(delete(Roadmap).where(Roadmap.id == roadmap_id))
+        await self.session.commit()

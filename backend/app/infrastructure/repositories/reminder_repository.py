@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import datetime, time
 from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -37,9 +37,13 @@ class SQLAlchemyReminderRepository:
         await self.session.refresh(reminder)
         return reminder
 
-    async def list_by_user(self, user_id: int) -> List[Reminder]:
+    async def list_by_user(self, user_id: int, limit: int, offset: int) -> List[Reminder]:
         result = await self.session.execute(
-            select(Reminder).where(Reminder.user_id == user_id).order_by(Reminder.time_of_day)
+            select(Reminder)
+            .where(Reminder.user_id == user_id)
+            .order_by(Reminder.time_of_day, Reminder.id)
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars().all())
 
@@ -80,7 +84,7 @@ class SQLAlchemyReminderRepository:
                 tz = ZoneInfo("UTC") 
 
             local_now = now_utc.astimezone(tz)
-            our_weekday = (local_now.weekday() + 1) % 7  
+            our_weekday = (local_now.weekday() + 1) % 7 
             today_local = local_now.date()
 
             if our_weekday not in reminder.days_of_week:

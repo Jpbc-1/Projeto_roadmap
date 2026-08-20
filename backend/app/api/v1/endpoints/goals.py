@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.goals.create_goal import EmailNotVerifiedError
 
 from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import PaginationParams, get_current_user
 from app.api.v1.schemas.goals import (
     GoalAnswersRequest,
     GoalCreate,
@@ -13,7 +14,6 @@ from app.api.v1.schemas.goals import (
     GoalOut,
     RecommendationOut,
 )
-from app.api.v1.schemas.knowledge import CreateKnowledgeNodeRequest, KnowledgeNodeOut
 from app.api.v1.schemas.roadmap import (
     AdaptGoalRequest,
     AdaptGoalResponse,
@@ -32,6 +32,7 @@ from app.application.goals.get_goal import (
 )
 from app.application.goals.list_goals import ListGoalsUseCase
 from app.application.roadmaps.adapt_roadmap import AdaptationFailedError, AdaptRoadmapUseCase
+from app.application.roadmaps.delete_roadmap import DeleteRoadmapUseCase
 from app.application.roadmaps.confirm_adaptation import (
     AdaptationOperationNoLongerValidError,
     ConfirmAdaptationUseCase,
@@ -46,8 +47,6 @@ from app.application.roadmaps.create_chapter import (
 from app.application.roadmaps.get_roadmap import GetRoadmapUseCase, RoadmapNotFoundError
 from app.application.roadmaps.propose_chapter_operation import ProposeChapterOperationUseCase
 from app.application.roadmaps.set_chapter_lock import SetChapterLockUseCase
-from app.application.knowledge.create_knowledge_node import CreateKnowledgeNodeUseCase
-from app.application.knowledge.spaced_repetition import compute_mastery_level
 from app.core.ai.gemini_client import GeminiClient
 from app.core.ai.usage_logging import UsageCollector
 from app.core.config import settings
@@ -56,7 +55,6 @@ from app.infrastructure.database.models import User
 from app.infrastructure.database.session import get_db_session
 from app.infrastructure.repositories.goal_repository import SQLAlchemyGoalRepository
 from app.infrastructure.repositories.job_repository import SQLAlchemyJobRepository
-from app.infrastructure.repositories.knowledge_node_repository import SQLAlchemyKnowledgeNodeRepository
 from app.infrastructure.repositories.mission_repository import SQLAlchemyMissionRepository
 from app.infrastructure.repositories.recommendation_repository import SQLAlchemyRecommendationRepository
 from app.infrastructure.repositories.roadmap_repository import SQLAlchemyRoadmapRepository
@@ -119,10 +117,11 @@ async def create_goal(
 async def list_goals(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
+    pagination: PaginationParams = Depends(PaginationParams),
 ):
     repository = SQLAlchemyGoalRepository(db)
     use_case = ListGoalsUseCase(repository)
-    return await use_case.execute(user_id=current_user.id)
+    return await use_case.execute(user_id=current_user.id, limit=pagination.limit, offset=pagination.offset)
 
 
 @router.get("/{goal_id}", response_model=GoalOut)
@@ -246,6 +245,28 @@ async def get_roadmap(
     )
 
 
+@router.delete("/{goal_id}/roadmap", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_roadmap(
+    goal_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Apaga o roadmap ativo deste objetivo -- capítulos, missões e
+    execuções registradas vão junto. O objetivo em si (Goal) continua
+    existindo, só fica sem roadmap; GET /goals/{goal_id}/roadmap volta a
+    dar 404 depois disso, agora com generation_status="deleted"."""
+    goal_repository = SQLAlchemyGoalRepository(db)
+    roadmap_repository = SQLAlchemyRoadmapRepository(db)
+    use_case = DeleteRoadmapUseCase(goal_repository, roadmap_repository)
+
+    try:
+        await use_case.execute(goal_id=goal_id, user_id=current_user.id)
+    except (GoalNotFoundError, GoalAccessDeniedError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
+    except RoadmapNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
 @router.post("/{goal_id}/adapt", response_model=AdaptGoalResponse)
 async def adapt_goal(
     goal_id: int,
@@ -258,8 +279,6 @@ async def adapt_goal(
     recommendation_repository = SQLAlchemyRecommendationRepository(db)
     user_repository = SQLAlchemyUserRepository(db)
 
-    # Confere posse ANTES de cobrar -- pedido pra um objetivo que não
-    # existe ou não é do usuário não deve custar crédito nenhum.
     goal = await goal_repository.get_by_id(goal_id)
     if goal is None or goal.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
@@ -274,12 +293,6 @@ async def adapt_goal(
     usage = UsageCollector(user_id=current_user.id)
 
     try:
-        # Primeira parada: o feedback mira um capítulo específico? Se sim, a
-        # IA já gera a operação mas NÃO aplica -- vira uma proposta pendente
-        # que precisa de POST /adapt/confirm (ou /adapt/reject) pra virar de
-        # fato. Propor operação de capítulo é adaptação -- mesmo nível de
-        # criar (pro -> médio -> fraco): gera conteúdo novo de qualidade
-        # equivalente.
         proposal_ai_client = GeminiClient(
             api_key=settings.GEMINI_API_KEY,
             model=settings.GEMINI_PRO_MODEL,
@@ -295,9 +308,6 @@ async def adapt_goal(
                 goal_id=goal_id, user_id=current_user.id, feedback=payload.feedback
             )
         except (GoalNotFoundError, GoalAccessDeniedError):
-            # Não deveria disparar (já checamos posse acima), mas cobre
-            # corrida rara (ex: objetivo apagado entre o check e aqui) sem
-            # deixar escapar como 500 cru.
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objetivo não encontrado.")
         except RoadmapNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -308,11 +318,6 @@ async def adapt_goal(
                 requires_confirmation=True,
             )
 
-        # scope == "broad" (feedback amplo, sem capítulo específico, ou
-        # mirava um capítulo protegido/concluído): comportamento de sempre,
-        # aplicado direto, sem passo de confirmação. Adaptar tudo é
-        # praticamente recriar o roadmap -- mesmo nível de
-        # GenerateRoadmapUseCase (pro -> médio -> fraco).
         ai_client = GeminiClient(
             api_key=settings.GEMINI_API_KEY,
             model=settings.GEMINI_PRO_MODEL,
@@ -332,17 +337,11 @@ async def adapt_goal(
         except RoadmapNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         except AdaptationFailedError as exc:
-            # 503 quando a causa raiz foi o Gemini sobrecarregado mesmo
-            # depois de esgotar toda a cadeia de fallback (o front pode
-            # tratar isso como "tente de novo em instantes" de forma
-            # diferente de um 502 genérico). Mensagem sanitizada -- não
-            # expõe a exceção crua do Gemini pro usuário.
             raise HTTPException(
                 status_code=exc.status_code or status.HTTP_502_BAD_GATEWAY,
                 detail=safe_error_message(exc, "Não foi possível adaptar o roadmap agora"),
             )
     except HTTPException:
-        # A ação não aconteceu de verdade -- devolve o crédito já cobrado.
         await user_repository.refund_credits(current_user.id, settings.CREDITS_COST_ADAPT)
         raise
     finally:
@@ -374,8 +373,6 @@ async def confirm_adaptation(
     except NoPendingAdaptationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except AdaptationOperationNoLongerValidError as exc:
-        # 409: o estado do recurso mudou entre propor e confirmar -- não é
-        # nem "não encontrado" nem "pedido inválido", é um conflito real.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
     return {"message": "Alteração aplicada com sucesso."}

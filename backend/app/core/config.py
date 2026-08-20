@@ -30,18 +30,16 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
 
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
-    GEMINI_PRO_MODEL: str = "gemini-3.6-flash"
+    GEMINI_PRO_MODEL: str = "gemini-3.7-flash"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.1-flash-lite"
     AUTO_ADAPT_EVERY_N_CHAPTERS: int = 2
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
 
-    
     JOB_POLL_INTERVAL_SECONDS: float = 2.0
     JOB_BATCH_SIZE: int = 5
     JOB_MAX_ATTEMPTS: int = 3
     JOB_STALE_AFTER_SECONDS: int = 600
 
-   
     REMINDER_SCHEDULER_INTERVAL_SECONDS: float = 60.0
 
     CREDITS_FREE_PLAN_STARTING: int = 500
@@ -52,6 +50,23 @@ class Settings(BaseSettings):
     LOGIN_RATE_LIMIT_PER_IP: int = 20
     LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 900
 
+    REGISTER_RATE_LIMIT_PER_IP: int = 5
+    REGISTER_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+
+    # Ver docstring de get_client_ip em app/core/rate_limiter.py antes de
+    # ligar isso em produção -- só é seguro atrás de um proxy que você TEM
+    # CERTEZA que sobrescreve X-Forwarded-For a cada requisição.
+    TRUST_PROXY_HEADERS: bool = False
+
+    DEFAULT_PAGE_SIZE: int = 50
+    MAX_PAGE_SIZE: int = 100
+
+    DAILY_REVIEW_LIMIT: int = 30
+
+    # OAuth social login (Google e Facebook agora; Apple é candidato óbvio
+    # depois -- ver docs/adr). Vazio por padrão: cada provider falha com
+    # erro claro SÓ quando alguém tenta usar ele sem estar configurado, não
+    # trava o boot da aplicação inteira (mesma filosofia do GEMINI_API_KEY).
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     FACEBOOK_APP_ID: str = ""
     FACEBOOK_APP_SECRET: str = ""
