@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.application.roadmaps.adapt_roadmap import AdaptationResult, AdaptRoadmapUseCase
@@ -47,20 +48,34 @@ class AutoAdaptRoadmapUseCase:
         triage_ai_client: GeminiClient,
         adapt_use_case: AdaptRoadmapUseCase,
         chapters_window: int = 2,
+        min_interval_hours: int = 20,
     ):
         self.roadmap_repository = roadmap_repository
         self.triage_ai_client = triage_ai_client
         self.adapt_use_case = adapt_use_case
         self.chapters_window = chapters_window
+        self.min_interval_hours = min_interval_hours
 
     async def execute(self, goal_id: int, user_id: int, roadmap_id: int) -> Optional[AdaptationResult]:
-        """Retorna None se decidiu não adaptar (nada mudou, ou algo falhou),
-        ou a quantidade de itens alterados se a adaptação completa foi
-        acionada. NUNCA deixa uma exceção escapar -- isso roda em
-        background, sem ninguém "ouvindo" pra tratar um erro; se algo
-        quebrar aqui sem log, o usuário só vê "não adaptou sozinho" sem
-        pista nenhuma do motivo."""
+        """Retorna None se decidiu não adaptar (nada mudou, cooldown ainda
+        ativo, ou algo falhou), ou a quantidade de itens alterados se a
+        adaptação completa foi acionada. NUNCA deixa uma exceção escapar --
+        isso roda em background, sem ninguém "ouvindo" pra tratar um erro;
+        se algo quebrar aqui sem log, o usuário só vê "não adaptou sozinho"
+        sem pista nenhuma do motivo."""
         try:
+            last_adapted_at = await self.roadmap_repository.get_last_adapted_at(roadmap_id)
+            if last_adapted_at is not None:
+                elapsed = datetime.now(timezone.utc) - last_adapted_at
+                if elapsed < timedelta(hours=self.min_interval_hours):
+                    logger.info(
+                        "Auto-adapt: roadmap %s em cooldown (última adaptação há %.1fh, mínimo é %sh).",
+                        roadmap_id,
+                        elapsed.total_seconds() / 3600,
+                        self.min_interval_hours,
+                    )
+                    return None
+
             recent_chapter_ids = await self._get_recent_completed_chapter_ids(roadmap_id)
             if not recent_chapter_ids:
                 logger.info("Auto-adapt: roadmap %s sem capítulos completed, nada a fazer.", roadmap_id)

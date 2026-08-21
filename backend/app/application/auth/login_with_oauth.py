@@ -36,7 +36,9 @@ class LoginWithOAuthUseCase:
         user = await self.user_repository.get_by_email(profile.email)
         if user is None:
             username = await self._resolve_username(profile.email)
-            user = await self.user_repository.create(email=profile.email, username=username, password_hash=None)
+            user = await self.user_repository.create(
+                email=profile.email, username=username, password_hash=None, email_verified=True
+            )
 
         await self.oauth_account_repository.create(
             user_id=user.id,

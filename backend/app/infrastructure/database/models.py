@@ -47,8 +47,8 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(30), unique=True, index=True, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    plan: Mapped[str] = mapped_column(String(20), default="plus")
-    credits_remaining: Mapped[int] = mapped_column(Integer, default=10000)
+    plan: Mapped[str] = mapped_column(String(20), default="free")
+    credits_remaining: Mapped[int] = mapped_column(Integer, default=500)
 
     timezone: Mapped[str] = mapped_column(String(50), default="America/Sao_Paulo")
 
@@ -179,6 +179,8 @@ class UserStats(Base):
     current_streak: Mapped[int] = mapped_column(Integer, default=0)
     max_streak: Mapped[int] = mapped_column(Integer, default=0)
     last_activity_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    last_bonus_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="stats")
 

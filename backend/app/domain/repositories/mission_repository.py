@@ -28,6 +28,21 @@ class MissionRepository(Protocol):
 
     async def get_user_stats(self, user_id: int) -> Optional[UserStats]: ...
 
+    async def lock_user_stats(self, user_id: int) -> Optional[UserStats]:
+        """Igual a get_user_stats, mas com SELECT...FOR UPDATE: trava a
+        linha (se ela já existir) dentro da transação atual até o próximo
+        commit/rollback desta sessão. Precisa ser chamado ANTES de calcular
+        o novo XP/streak (calculate_streak_update), e a mesma sessão tem
+        que seguir sem commit no meio até persist_completion -- é isso que
+        serializa duas conclusões de missões DIFERENTES quase simultâneas
+        do mesmo usuário, evitando que uma escrita sobrescreva a outra
+        (lost update). Devolve None se o usuário ainda não tem UserStats
+        (primeira missão concluída na conta) -- não tem linha pra travar
+        ainda; esse caso específico (dois "primeiro ever" concorrentes)
+        não é coberto por este lock, só o caso comum de quem já tem stats.
+        """
+        ...
+
     async def persist_completion(
         self,
         mission_id: int,

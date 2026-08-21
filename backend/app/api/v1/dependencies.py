@@ -23,12 +23,17 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    email = decode_access_token(token)
-    if email is None:
+    subject = decode_access_token(token)
+    if subject is None:
+        raise credentials_exception
+
+    try:
+        user_id = int(subject)
+    except (TypeError, ValueError):
         raise credentials_exception
 
     repository = SQLAlchemyUserRepository(db)
-    user = await repository.get_by_email(email)
+    user = await repository.get_by_id(user_id)
     if user is None:
         raise credentials_exception
 

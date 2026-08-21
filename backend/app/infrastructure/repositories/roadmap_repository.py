@@ -104,6 +104,10 @@ class SQLAlchemyRoadmapRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_last_adapted_at(self, roadmap_id: int) -> Optional[datetime]:
+        result = await self.session.execute(select(Roadmap.last_adapted_at).where(Roadmap.id == roadmap_id))
+        return result.scalar_one_or_none()
+
     async def get_chapter_ids_with_executions(self, chapter_ids: List[int]) -> Set[int]:
         """Checagem de segurança: quais desses capítulos têm QUALQUER missão
         já executada -- esses NUNCA podem ser apagados, mesmo que estejam

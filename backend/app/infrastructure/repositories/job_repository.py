@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import case, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import BackgroundJob
@@ -32,6 +32,18 @@ class SQLAlchemyJobRepository:
 
     async def get_by_id(self, job_id: int) -> Optional[BackgroundJob]:
         return await self.session.get(BackgroundJob, job_id)
+
+    async def count_recent_by_type_and_user(self, user_id: int, job_type: str, since: datetime) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(BackgroundJob)
+            .where(
+                BackgroundJob.user_id == user_id,
+                BackgroundJob.job_type == job_type,
+                BackgroundJob.created_at >= since,
+            )
+        )
+        return result.scalar_one()
 
     async def claim_next_jobs(self, limit: int, stale_after_seconds: int) -> List[BackgroundJob]:
         now = datetime.now(timezone.utc)

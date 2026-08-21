@@ -18,6 +18,13 @@ class RoadmapRepository(Protocol):
         carregados (para evitar N+1 queries ao montar a resposta)."""
         ...
 
+    async def get_last_adapted_at(self, roadmap_id: int) -> Optional[datetime]:
+        """Só a coluna last_adapted_at, sem carregar capítulos/missões --
+        usado pra checar o cooldown do auto-adapt (settings.
+        AUTO_ADAPT_MIN_INTERVAL_HOURS) antes de sequer decidir se vale a
+        pena montar o resto do use case."""
+        ...
+
     async def append_chapters(
         self,
         roadmap_id: int,

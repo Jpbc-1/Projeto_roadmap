@@ -15,6 +15,7 @@ from app.application.goals.moderate_goal_content import ModerateGoalContentUseCa
 from app.application.flashcards.extract_concepts import ExtractConceptsUseCase
 from app.application.roadmaps.adapt_roadmap import AdaptRoadmapUseCase
 from app.application.roadmaps.auto_adapt_roadmap import AutoAdaptRoadmapUseCase
+from app.application.roadmaps.propose_chapter_operation import ProposeChapterOperationUseCase
 from app.core.ai.gemini_client import GeminiClient
 from app.core.ai.usage_logging import UsageCollector
 from app.core.config import settings
@@ -92,23 +93,66 @@ async def handle_generate_roadmap(session: AsyncSession, payload: Dict[str, Any]
 
 
 async def handle_adapt_roadmap(session: AsyncSession, payload: Dict[str, Any]) -> None:
+    """Faz o trabalho de verdade de POST /goals/{id}/adapt -- o endpoint só
+    checa posse, cobra o crédito e enfileira isto (ver goals.py), pra não
+    segurar a requisição HTTP presa esperando a IA responder (pode levar
+    vários segundos, com duas chamadas -- classificação + geração -- em
+    sequência na pior das hipóteses). O client dá poll em GET /jobs/{id}
+    pra saber quando terminou, e depois busca GET /goals/{id}/roadmap de
+    novo pra ver o resultado (pending_adaptation preenchido = tem proposta
+    esperando confirmação; capítulos/missões diferentes = já foi aplicado
+    direto).
+
+    Mesmo contrato de handle_generate_roadmap: NUNCA deixa uma exceção
+    escapar sem reembolsar o crédito. Diferente dele, este job é
+    enfileirado com max_attempts=1 (ver goals.py) e a exceção é
+    RE-LEVANTADA depois do reembolso (não engolida) -- assim o job fica
+    visivelmente "failed" (com last_error) pra quem der poll, em vez de
+    "completed" sem ter completado nada de verdade. Como max_attempts=1,
+    não tem retentativa automática depois do reembolso -- se tivesse,
+    reembolsar a cada tentativa arriscaria reembolsar 3x uma cobrança que
+    só aconteceu 1x (ou pior: reembolsar e DEPOIS a retentativa dar certo,
+    cobrando de graça)."""
+    goal_id = payload["goal_id"]
+    user_id = payload["user_id"]
+    feedback = payload.get("feedback")
+
     goal_repository = SQLAlchemyGoalRepository(session)
     roadmap_repository = SQLAlchemyRoadmapRepository(session)
     recommendation_repository = SQLAlchemyRecommendationRepository(session)
-    usage = UsageCollector(user_id=payload.get("user_id"))
+    user_repository = SQLAlchemyUserRepository(session)
+    usage = UsageCollector(user_id=user_id)
 
-    ai_client = GeminiClient(
-        api_key=settings.GEMINI_API_KEY,
-        model=settings.GEMINI_PRO_MODEL,
-        fallback_models=[settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL],
-        on_usage=usage.logger_for("adapt_roadmap"),
-    )
+    try:
+        proposal_ai_client = GeminiClient(
+            api_key=settings.GEMINI_API_KEY,
+            model=settings.GEMINI_PRO_MODEL,
+            fallback_models=[settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL],
+            on_usage=usage.logger_for("propose_chapter_operation"),
+        )
+        propose_use_case = ProposeChapterOperationUseCase(goal_repository, roadmap_repository, proposal_ai_client)
+        classification = await propose_use_case.execute(goal_id=goal_id, user_id=user_id, feedback=feedback)
 
-    use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, recommendation_repository, ai_client)
-    await use_case.execute(
-        goal_id=payload["goal_id"], user_id=payload["user_id"], feedback=payload.get("feedback")
-    )
-    await usage.flush(session)
+        if classification.scope == "chapter_operation" and classification.operation is not None:
+            await usage.flush(session)
+            return
+
+        adapt_ai_client = GeminiClient(
+            api_key=settings.GEMINI_API_KEY,
+            model=settings.GEMINI_PRO_MODEL,
+            fallback_models=[settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL],
+            on_usage=usage.logger_for("adapt_roadmap"),
+        )
+        use_case = AdaptRoadmapUseCase(goal_repository, roadmap_repository, recommendation_repository, adapt_ai_client)
+        await use_case.execute(goal_id=goal_id, user_id=user_id, feedback=feedback)
+        await usage.flush(session)
+
+    except Exception:
+        await session.rollback()
+        logger.exception("handle_adapt_roadmap falhou (goal_id=%s): reembolsando crédito.", goal_id)
+        await user_repository.refund_credits(user_id, settings.CREDITS_COST_ADAPT)
+        await usage.flush(session)
+        raise
 
 
 async def handle_auto_adapt_roadmap(session: AsyncSession, payload: Dict[str, Any]) -> None:
@@ -135,6 +179,7 @@ async def handle_auto_adapt_roadmap(session: AsyncSession, payload: Dict[str, An
         triage_ai_client=triage_ai_client,
         adapt_use_case=adapt_use_case,
         chapters_window=settings.AUTO_ADAPT_EVERY_N_CHAPTERS,
+        min_interval_hours=settings.AUTO_ADAPT_MIN_INTERVAL_HOURS,
     )
     await use_case.execute(
         goal_id=payload["goal_id"], user_id=payload["user_id"], roadmap_id=payload["roadmap_id"]

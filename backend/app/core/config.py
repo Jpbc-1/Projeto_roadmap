@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     AUTO_ADAPT_EVERY_N_CHAPTERS: int = 2
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
 
+   
+    AUTO_ADAPT_MIN_INTERVAL_HOURS: int = 20
+
+    EXTRACT_CONCEPTS_MAX_PER_DAY: int = 15
+
     JOB_POLL_INTERVAL_SECONDS: float = 2.0
     JOB_BATCH_SIZE: int = 5
     JOB_MAX_ATTEMPTS: int = 3
@@ -63,10 +68,6 @@ class Settings(BaseSettings):
 
     DAILY_REVIEW_LIMIT: int = 30
 
-    # OAuth social login (Google e Facebook agora; Apple é candidato óbvio
-    # depois -- ver docs/adr). Vazio por padrão: cada provider falha com
-    # erro claro SÓ quando alguém tenta usar ele sem estar configurado, não
-    # trava o boot da aplicação inteira (mesma filosofia do GEMINI_API_KEY).
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     FACEBOOK_APP_ID: str = ""
     FACEBOOK_APP_SECRET: str = ""

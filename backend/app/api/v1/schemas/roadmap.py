@@ -29,6 +29,7 @@ class RoadmapProgressOut(BaseModel):
     version: int
     current_chapter_id: Optional[int]
     current_mission_id: Optional[int]
+    pending_adaptation: Optional[dict] = None
     chapters: List[ChapterProgressOut]
 
 
@@ -43,6 +44,7 @@ class ChapterCreateRequest(BaseModel):
 
 class AdaptGoalResponse(BaseModel):
     message: str
+    job_id: Optional[int] = None
     requires_confirmation: bool = False
     chapters_changed: Optional[int] = None
     missions_changed: Optional[int] = None

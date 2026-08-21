@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any, List, Optional
 
-from sqlalchemy import Select, delete as sql_delete, func, select
+from sqlalchemy import Select, delete as sql_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.repositories.flashcard_repository import FlashcardContext
@@ -211,23 +211,41 @@ class SQLAlchemyFlashcardRepository:
         current_streak: int,
         max_streak: int,
         activity_date: date,
-    ) -> None:
-        stats = await self.get_user_stats(user_id)
-        if stats is None:
-            stats = UserStats(
-                user_id=user_id,
+    ) -> bool:
+        result = await self.session.execute(
+            update(UserStats)
+            .where(
+                UserStats.user_id == user_id,
+                (UserStats.last_bonus_date.is_(None)) | (UserStats.last_bonus_date < activity_date),
+            )
+            .values(
                 total_xp=total_xp,
                 current_level=level,
                 current_streak=current_streak,
                 max_streak=max_streak,
                 last_activity_date=activity_date,
+                last_bonus_date=activity_date,
             )
-            self.session.add(stats)
-        else:
-            stats.total_xp = total_xp
-            stats.current_level = level
-            stats.current_streak = current_streak
-            stats.max_streak = max_streak
-            stats.last_activity_date = activity_date
+        )
+        if result.rowcount > 0:
+            await self.session.commit()
+            return True
 
+        await self.session.rollback()
+
+        stats = await self.get_user_stats(user_id)
+        if stats is not None:
+            return False
+
+        stats = UserStats(
+            user_id=user_id,
+            total_xp=total_xp,
+            current_level=level,
+            current_streak=current_streak,
+            max_streak=max_streak,
+            last_activity_date=activity_date,
+            last_bonus_date=activity_date,
+        )
+        self.session.add(stats)
         await self.session.commit()
+        return True
