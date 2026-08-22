@@ -5,7 +5,11 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, SpaceGrotesk_500Medium, SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { Caveat_600SemiBold, Caveat_700Bold } from '@expo-google-fonts/caveat';
-import { QueryClient, QueryClientProvider, focusManager, useQuery } from '@tanstack/react-query';
+import NetInfo from '@react-native-community/netinfo';
+import { QueryClient, QueryClientProvider, focusManager, useQuery, onlineManager } from '@tanstack/react-query';
+import { persistQueryClient } from '@tanstack/react-query-persist-client';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from './src/theme/colors';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { usePushNotifications } from './src/hooks/usePushNotifications';
@@ -42,6 +46,26 @@ const queryClient = new QueryClient({
       refetchOnReconnect: true,
     },
   },
+});
+
+// Cria o mecanismo para salvar o cache em disco via AsyncStorage
+const persister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+});
+
+// Conecta o queryClient ao persister, garantindo que a fila
+// sobreviva ao fechar o app
+persistQueryClient({
+  queryClient,
+  persister,
+});
+
+// Avisa o react-query sempre que a internet cair ou voltar
+onlineManager.setEventListener((setOnline) => {
+  return NetInfo.addEventListener((state) => {
+    // O "!!"" garante que o valor repassado seja estritamente booleano
+    setOnline(!!state.isConnected);
+  });
 });
 
 // react-query espera um evento tipo 'visibilitychange' da web pra saber
