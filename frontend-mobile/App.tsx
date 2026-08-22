@@ -21,6 +21,7 @@ import RotinaScreen from './src/screens/RotinaScreen';
 import ObjetivosScreen from './src/screens/ObjetivosScreen';
 import ComingSoonScreen from './src/screens/ComingSoonScreen';
 import BottomNav from './src/components/BottomNav';
+import OfflineBanner from './src/components/OfflineBanner';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -168,6 +169,7 @@ export default function App() {
       <AuthProvider>
         <SafeAreaProvider>
           <SafeAreaView style={styles.safeArea} edges={['top']}>
+            <OfflineBanner />
             <AppShell />
           </SafeAreaView>
           <StatusBar style="dark" />
