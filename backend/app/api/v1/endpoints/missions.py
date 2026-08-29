@@ -1,3 +1,6 @@
+import logging
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +38,8 @@ from app.infrastructure.repositories.job_repository import SQLAlchemyJobReposito
 from app.infrastructure.repositories.mission_repository import SQLAlchemyMissionRepository
 from app.infrastructure.repositories.roadmap_repository import SQLAlchemyRoadmapRepository
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -71,35 +76,80 @@ async def complete_mission(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     if result.chapter_completed_id is not None:
-        await job_repository.enqueue(
-            "extract_knowledge_nodes",
-            {
-                "goal_id": result.goal_id,
-                "user_id": current_user.id,
-                "chapter_id": result.chapter_completed_id,
-                "user_timezone": current_user.timezone,
-            },
-            user_id=current_user.id,
-        )
+        try:
+            since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+            recent_extractions = await job_repository.count_recent_by_type_and_user(
+                current_user.id, "extract_knowledge_nodes", since=since_24h
+            )
+            if recent_extractions < settings.EXTRACT_CONCEPTS_MAX_PER_DAY:
+                await job_repository.enqueue(
+                    "extract_knowledge_nodes",
+                    {
+                        "goal_id": result.goal_id,
+                        "user_id": current_user.id,
+                        "chapter_id": result.chapter_completed_id,
+                        "user_timezone": current_user.timezone,
+                    },
+                    user_id=current_user.id,
+                )
+            else:
+                logger.info(
+                    "extract_knowledge_nodes: teto diário atingido (user_id=%s, %s/%sh).",
+                    current_user.id,
+                    recent_extractions,
+                    settings.EXTRACT_CONCEPTS_MAX_PER_DAY,
+                )
+        except Exception:
+            logger.exception(
+                "Falha ao decidir/enfileirar extract_knowledge_nodes (mission_id=%s, user_id=%s) -- "
+                "a conclusão da missão já foi salva normalmente.",
+                mission_id,
+                current_user.id,
+            )
 
-        completed_count = await roadmap_repository.count_completed_chapters(result.roadmap_id)
-        if completed_count > 0 and completed_count % settings.AUTO_ADAPT_EVERY_N_CHAPTERS == 0:
-            await job_repository.enqueue(
-                "auto_adapt_roadmap",
-                {
-                    "goal_id": result.goal_id,
-                    "user_id": current_user.id,
-                    "roadmap_id": result.roadmap_id,
-                },
-                user_id=current_user.id,
+        try:
+            completed_count = await roadmap_repository.count_completed_chapters(result.roadmap_id)
+            if completed_count > 0 and completed_count % settings.AUTO_ADAPT_EVERY_N_CHAPTERS == 0:
+                await job_repository.enqueue(
+                    "auto_adapt_roadmap",
+                    {
+                        "goal_id": result.goal_id,
+                        "user_id": current_user.id,
+                        "roadmap_id": result.roadmap_id,
+                    },
+                    user_id=current_user.id,
+                )
+        except Exception:
+            logger.exception(
+                "Falha ao decidir/enfileirar auto_adapt_roadmap (mission_id=%s, user_id=%s) -- "
+                "a conclusão da missão já foi salva normalmente.",
+                mission_id,
+                current_user.id,
             )
 
     if result.goal_completed:
-        await goal_repository.update(result.goal_id, status="achieved")
+        try:
+            await goal_repository.update(result.goal_id, status="achieved")
+        except Exception:
+            logger.exception(
+                "Falha ao marcar goal_id=%s como achieved (mission_id=%s) -- "
+                "a conclusão da missão já foi salva normalmente.",
+                result.goal_id,
+                mission_id,
+            )
 
-    newly_unlocked = await CheckAchievementsUseCase(achievement_repository).execute(
-        user_id=current_user.id, current_streak=result.current_streak
-    )
+    newly_unlocked = []
+    try:
+        newly_unlocked = await CheckAchievementsUseCase(achievement_repository).execute(
+            user_id=current_user.id, current_streak=result.current_streak
+        )
+    except Exception:
+        logger.exception(
+            "Falha ao checar conquistas (mission_id=%s, user_id=%s) -- "
+            "a conclusão da missão já foi salva normalmente.",
+            mission_id,
+            current_user.id,
+        )
 
     response = MissionExecutionOut.model_validate(result.execution)
     response.chapter_completed = result.chapter_completed_id is not None

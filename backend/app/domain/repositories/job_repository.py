@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol
 
 from app.infrastructure.database.models import BackgroundJob
@@ -15,6 +16,17 @@ class JobRepository(Protocol):
         ...
 
     async def get_by_id(self, job_id: int) -> Optional[BackgroundJob]: ...
+
+    async def count_recent_by_type_and_user(self, user_id: int, job_type: str, since: datetime) -> int:
+        """Quantos jobs deste tipo foram enfileirados para este usuário
+        desde `since` -- usado como teto anti-abuso (settings.
+        EXTRACT_CONCEPTS_MAX_PER_DAY) pra não deixar alguém completando
+        capítulos em sequência rápida gerar uma chamada de IA paga (Gemini)
+        por chapter_id sem limite algum. Janela rolante em UTC (não por
+        fuso do usuário) de propósito: isto é controle de custo, não uma
+        feature voltada pro usuário -- não precisa da mesma precisão de
+        "meia-noite local" que o DAILY_REVIEW_LIMIT de flashcards tem."""
+        ...
 
     async def claim_next_jobs(self, limit: int, stale_after_seconds: int) -> List[BackgroundJob]:
         """Reivindica até `limit` jobs pendentes e prontos pra rodar (marca

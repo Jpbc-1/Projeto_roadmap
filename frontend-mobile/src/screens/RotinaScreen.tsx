@@ -108,6 +108,10 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
+    paddingBottom: spacing.md, // Um respiro legal embaixo dos dias da semana
+    backgroundColor: '#F5EFE6', // Cor de fundo destacada para a parte fixa
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(31,22,12,0.08)', // Linha divisória sutil
   },
   headerTop: {
     flexDirection: 'row',

@@ -69,6 +69,12 @@ class SQLAlchemyMissionRepository:
         result = await self.session.execute(select(UserStats).where(UserStats.user_id == user_id))
         return result.scalar_one_or_none()
 
+    async def lock_user_stats(self, user_id: int) -> Optional[UserStats]:
+        result = await self.session.execute(
+            select(UserStats).where(UserStats.user_id == user_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def persist_completion(
         self,
         mission_id: int,

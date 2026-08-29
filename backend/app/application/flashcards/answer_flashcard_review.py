@@ -114,9 +114,9 @@ class AnswerFlashcardReviewUseCase:
             remaining_count = min(raw_overdue, remaining_quota)
 
             if remaining_count == 0:
-                await self._award_daily_bonus(user_id, today_for_user)
-                daily_bonus_awarded = True
-                xp_earned = DAILY_REVIEW_BONUS_XP
+                daily_bonus_awarded = await self._award_daily_bonus(user_id, today_for_user)
+                if daily_bonus_awarded:
+                    xp_earned = DAILY_REVIEW_BONUS_XP
 
         return AnswerFlashcardReviewResult(
             flashcard=updated_flashcard,
@@ -126,11 +126,11 @@ class AnswerFlashcardReviewUseCase:
             xp_earned=xp_earned,
         )
 
-    async def _award_daily_bonus(self, user_id: int, today_for_user: date) -> None:
+    async def _award_daily_bonus(self, user_id: int, today_for_user: date) -> bool:
         stats = await self.flashcard_repository.get_user_stats(user_id)
         update = calculate_streak_update(stats, xp_to_add=DAILY_REVIEW_BONUS_XP, today=today_for_user)
 
-        await self.flashcard_repository.apply_daily_review_bonus(
+        return await self.flashcard_repository.apply_daily_review_bonus(
             user_id=user_id,
             total_xp=update.new_total_xp,
             level=update.new_level,

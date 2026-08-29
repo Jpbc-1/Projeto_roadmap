@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { ScrollView, Text, View, StyleSheet } from 'react-native';
 import { colors, spacing, typography } from '../theme/colors';
 import { AgendaItem } from '../hooks/useAgenda';
-import { isSameDay } from '../utils/dateUtils';
 import AgendaEventCard from './AgendaEventCard';
+import { isSameDay, addDays, formatLongDate } from '../utils/dateUtils';
 
 type DayTimelineProps = {
   day: Date;
@@ -11,7 +11,7 @@ type DayTimelineProps = {
   onPressItem?: (item: AgendaItem) => void;
 };
 
-const START_HOUR = 6;
+const START_HOUR = 0;
 const END_HOUR = 23;
 const HOUR_HEIGHT = 64;
 // A point-in-time reminder still needs a tappable, readable card —
@@ -68,6 +68,14 @@ export default function DayTimeline({ day, items, onPressItem }: DayTimelineProp
           </View>
         ))}
 
+        
+        <View style={[styles.hourRow, { top: hours.length * HOUR_HEIGHT }]}>
+          <Text style={[styles.hourLabel, { width: 140, fontSize: 11, color: colors.textSecondary }]}>
+            {formatLongDate(addDays(day, 1))} 
+          </Text>
+        </View>
+        
+
         {showNowLine && (
           <View style={[styles.nowLine, { top: nowOffset }]}>
             <View style={styles.nowDot} />
@@ -101,6 +109,7 @@ export default function DayTimeline({ day, items, onPressItem }: DayTimelineProp
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
+    paddingTop: spacing.sm, // Dá um respiro para o 00:00 aparecer inteiro
   },
   grid: {
     position: 'relative',
@@ -117,7 +126,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.textSecondary,
     width: LABEL_COLUMN_WIDTH,
-    marginTop: -7, // centers the label on the line instead of below it
+    marginTop: 0, // Removi o -7 que jogava o texto para cima cortando a linha
   },
   hourLine: {
     flex: 1,

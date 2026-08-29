@@ -1,12 +1,16 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.dependencies import get_current_user
 from app.api.v1.schemas.auth import FacebookLoginRequest, GoogleLoginRequest, Token, UserCreate, UserOut
 from app.application.auth.authenticate_user import (
     AuthenticateUserUseCase,
     InvalidCredentialsError,
 )
+from app.application.auth.email_verification import ConfirmEmailUseCase, InvalidTokenError, SendVerificationEmailUseCase
 from app.application.auth.login_with_oauth import LoginWithOAuthUseCase
 from app.application.auth.register_user import (
     EmailAlreadyRegisteredError,
@@ -18,9 +22,12 @@ from app.core.oauth.facebook import FacebookTokenVerificationError, verify_faceb
 from app.core.oauth.google import GoogleTokenVerificationError, verify_google_id_token
 from app.core.rate_limiter import get_client_ip, login_rate_limiter, register_rate_limiter
 from app.core.security import create_access_token
+from app.infrastructure.database.models import User
 from app.infrastructure.database.session import get_db_session
 from app.infrastructure.repositories.oauth_account_repository import SQLAlchemyOAuthAccountRepository
 from app.infrastructure.repositories.user_repository import SQLAlchemyUserRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -91,7 +98,7 @@ async def login(
 
     await login_rate_limiter.reset(email_key)
 
-    access_token = create_access_token(subject=user.email)
+    access_token = create_access_token(subject=str(user.id))
     return Token(access_token=access_token)
 
 
@@ -107,7 +114,7 @@ async def login_with_google(payload: GoogleLoginRequest, db: AsyncSession = Depe
     use_case = LoginWithOAuthUseCase(user_repository, oauth_account_repository)
     user = await use_case.execute(profile)
 
-    access_token = create_access_token(subject=user.email)
+    access_token = create_access_token(subject=str(user.id))
     return Token(access_token=access_token)
 
 
@@ -123,8 +130,44 @@ async def login_with_facebook(payload: FacebookLoginRequest, db: AsyncSession = 
     use_case = LoginWithOAuthUseCase(user_repository, oauth_account_repository)
     user = await use_case.execute(profile)
 
-    access_token = create_access_token(subject=user.email)
+    access_token = create_access_token(subject=str(user.id))
     return Token(access_token=access_token)
+
+
+@router.post("/send-verify-email", status_code=200)
+async def send_verify_email(current_user: User = Depends(get_current_user)):
+    """Rota que o app chama para pedir o e-mail de verificação."""
+    use_case = SendVerificationEmailUseCase()
+    token = await use_case.execute(current_user.email)
+    
+    print("\n" + "=" * 20)
+    print(f"O SEU TOKEN É: {token}")
+    print("=" * 20 + "\n")
+    import time; time.sleep(5) 
+
+    logger.info(
+        "Link de verificação de e-mail para %s (ainda não enviado por e-mail de verdade, "
+        "ver infrastructure/services/email.py): /api/v1/auth/verify-email?token=%s",
+        current_user.email,
+        token,
+    )
+
+    return {"message": "E-mail de verificação enviado com sucesso."}
+
+@router.get("/verify-email", status_code=200)
+async def verify_email(token: str, db: AsyncSession = Depends(get_db_session)):
+    """
+    Rota que valida o clique no link do e-mail. 
+    Usamos GET em vez de POST para você poder clicar no link direto no terminal!
+    """
+    repository = SQLAlchemyUserRepository(db)
+    use_case = ConfirmEmailUseCase(repository, db)
+    
+    try:
+        await use_case.execute(token)
+        return {"message": "Seu e-mail foi verificado com sucesso!"}
+    except InvalidTokenError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # Nota pro Apple Sign In (mencionado como "depois"): quando chegar a hora,

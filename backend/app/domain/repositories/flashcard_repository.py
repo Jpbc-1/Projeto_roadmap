@@ -133,9 +133,22 @@ class FlashcardRepository(Protocol):
         current_streak: int,
         max_streak: int,
         activity_date,
-    ) -> None:
+    ) -> bool:
         """Aplica o bônus por ter zerado a fila de revisões do dia -- SÓ
         chamado quando a fila do BARALHO PRINCIPAL zera (ver
         AnswerFlashcardReviewUseCase); baralhos extra não contam pro
-        streak."""
+        streak.
+
+        Idempotente por dia via UPDATE...WHERE atômico condicionado a
+        user_stats.last_bonus_date (mesmo padrão de try_deduct_credits):
+        SÓ aplica se last_bonus_date ainda não for hoje. Devolve True se
+        aplicou de verdade, False se o bônus de hoje já tinha sido dado
+        antes (nesse caso quem chama NÃO deve contar XP/bônus de novo).
+
+        Isso importa porque "a fila zerou" não é um evento único no dia:
+        se a fila esvaziar de novo mais tarde (um card "again" que a
+        própria FSRS reagenda pra minutos depois, ou um flashcard novo
+        que entrou e foi revisado ainda hoje), ela pode voltar a zerar
+        outra vez -- sem esta trava, isso concederia o bônus mais de uma
+        vez no mesmo dia."""
         ...

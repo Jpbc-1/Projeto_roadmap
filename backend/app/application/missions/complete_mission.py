@@ -61,7 +61,7 @@ class CompleteMissionUseCase:
             mission_id=mission_id,
         )
 
-        stats = await self.mission_repository.get_user_stats(user_id)
+        stats = await self.mission_repository.lock_user_stats(user_id)
         try:
             today_for_user = datetime.now(ZoneInfo(user_timezone)).date()
         except Exception:
