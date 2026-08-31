@@ -32,7 +32,41 @@ export function useCompleteMission(goalId: number | null) {
   return useMutation({
     mutationFn: ({ missionId, input }: { missionId: number; input?: CompleteMissionInput }) =>
       roadmapService.completeMission(missionId, input),
-    onSuccess: () => {
+    onMutate: async ({ missionId }) => {
+      await queryClient.cancelQueries({ queryKey: ['roadmap', goalId] });
+      const previousRoadmap = queryClient.getQueryData(['roadmap', goalId]);
+      queryClient.setQueryData(['roadmap', goalId], (oldData: any) => {
+        if (!oldData) return oldData;
+
+        return {
+          ...oldData,
+          chapters: oldData.chapters.map((chapter: any) => ({
+            ...chapter,
+            missions: chapter.missions.map((mission: any) =>
+              mission.id === missionId ? { ...mission, completed: true } : mission
+            ),
+          })),
+        };
+      });
+
+      return { previousRoadmap };
+    },
+    onError: (error: any, variables, context) => {
+      const isAlreadyCompleted =
+        error.response?.status === 400 &&
+        error.response?.data?.detail === "Esta missão já foi concluída.";
+
+        if (isAlreadyCompleted) {
+          return;
+        }
+
+        if (context?.previousRoadmap) {
+          queryClient.setQueryData(['roadmap', goalId], context.previousRoadmap);
+        }
+
+        // Espaço para possível função global de Toast (ex: showErrorToast('Erro ao completar')), 
+    },
+    onSettled: () => { // A função vai rodar independente de dar certo ou errado (inclusive quando a fila reconecta)
       invalidateRoadmap();
       // Completar uma missão concede XP e pode mudar nível/streak --
       // isso vive no perfil de gamificação (useMyProfile), uma query
